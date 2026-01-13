@@ -10,7 +10,7 @@ ID_DOSSIER = "1A2b3C4d5E6f7G8h9I0j_kLMnO_pQrStU"
 
 conn = st.connection('gcs', type=FilesConnection)
 
-@st.cache_data(ttl=3600)
+# @st.cache_data(ttl=3600)
 def load_data(folder_id):
     try:
         # Nettoyage de l'ID au cas où
