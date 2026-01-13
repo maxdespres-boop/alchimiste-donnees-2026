@@ -9,8 +9,8 @@ st.set_page_config(page_title="Dashboard Ventes Hebdo", layout="wide")
 conn = st.connection('gcs', type=FilesConnection)
 
 # Remplacez par le chemin de votre dossier Drive
-# Format: "gdrive://[FOLDER_ID]/*.CSV"
-folder_id = "VOTRE_ID_DE_DOSSIER_ICI"
+# Format: "gdrive://1A2b3C4d5E6f7G8h9I0j_kLMnO_pQrStU/*.CSV"
+folder_id = "1A2b3C4d5E6f7G8h9I0j_kLMnO_pQrStU"
 
 @st.cache_data(ttl=3600) # Rafraîchit les données toutes les heures
 def load_data():
