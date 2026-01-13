@@ -3,3 +3,4 @@ pandas
 plotly
 google-api-python-client
 google-auth
+xlsxwriter
