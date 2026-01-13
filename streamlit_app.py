@@ -68,30 +68,7 @@ try:
                 'LineQty': 'sum',
                 'LineTotal': 'sum'
             }).reset_index().sort_values('LineQty', ascending=False)
-            latest_sku.columns = ['Code', 'Produit', 'Caisses Vendues', 'Ventes Totales ($)']
-            st.table(latest_sku)
-
-        st.divider()
-
-        # --- KPI GLOBAUX ---
-        total_caisses = df['LineQty'].sum()
-        total_ventes = df['LineTotal'].sum()
-        total_rabais = df['Rabais'].sum()
-        pct_rabais = (total_rabais / (total_ventes + total_rabais) * 100) if (total_ventes + total_rabais) != 0 else 0
-
-        st.subheader(f"📈 Performance Globale")
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Total Caisses", f"{total_caisses:,.0f}")
-        c2.metric("Ventes ($)", f"{total_ventes:,.2f} $")
-        c3.metric("Total Rabais ($)", f"{total_rabais:,.2f} $")
-        c4.metric("% Rabais", f"{pct_rabais:.2f} %")
-
-        # --- 2. ANALYSE SKU (Correction superposition) ---
-        st.header("📦 Ventes par Produit (SKU)")
-        
-        sku_total = df.groupby(['ItemCode', 'ItemName'])['LineQty'].sum().reset_index().sort_values('LineQty', ascending=False)
-        
-        # Renommage pour éviter les noms trop longs
-        sku_total['ItemName'] = sku_total['ItemName'].replace({
-            'La Blonde sans alcool': 'BLO Sans Alcool',
-            'La Blanche sans alcool': 'BLA Sans Alcool'
+            
+            # Renommage aussi dans le tableau de bord hebdomadaire pour cohérence
+            latest_sku['ItemName'] = latest_sku['ItemName'].replace({
+                'La Blonde sans alcool': 'BLO Sans Alcool',
