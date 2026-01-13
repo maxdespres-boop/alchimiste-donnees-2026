@@ -12,28 +12,14 @@ conn = st.connection('gcs', type=FilesConnection)
 
 # @st.cache_data(ttl=3600)
 def load_data(folder_id):
+    clean_id = folder_id.strip().split('/')[-1]
     try:
-        # Nettoyage de l'ID au cas où
-        clean_id = folder_id.strip().split('/')[-1]
-        path = f"gdrive://{clean_id}/"
-        
-        # Lister les fichiers
-        files = conn.fs.ls(path)
-        csv_files = [f for f in files if f.lower().endswith('.csv')]
-        
-        if not csv_files:
-            return None
-
-        df_list = []
-        for file_path in csv_files:
-            with conn.fs.open(file_path, 'rb') as f:
-                # Lecture avec encodage adapté pour les accents
-                df_temp = pd.read_csv(f, sep=',', encoding='latin1')
-                df_list.append(df_temp)
-        
-        return pd.concat(df_list, ignore_index=True)
+        files = conn.fs.ls(f"gdrive://{clean_id}/")
+        st.success(f"Connexion réussie ! Fichiers trouvés : {len(files)}")
+        # ... (reste du code pour lire les CSV) ...
     except Exception as e:
-        st.error(f"Erreur de connexion Drive : {e}")
+        st.error(f"Détail technique de l'erreur : {str(e)}")
+        # Cela nous dira si c'est 'Permission Denied', 'Invalid Credentials' ou 'API not enabled'
         return None
 
 # Lancement du chargement
