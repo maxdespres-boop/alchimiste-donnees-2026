@@ -93,9 +93,28 @@ try:
         # --- 2. ANALYSE SKU ---
         st.header("📦 Ventes par Produit (SKU)")
         sku_total = df.groupby(['ItemCode', 'ItemName'])['LineQty'].sum().reset_index().sort_values('LineQty', ascending=False)
+        
+        # --- PETIT AJOUT POUR RACCOURCIR LES NOMS ---
+        # Cette ligne remplace les noms longs par des noms courts si vous le souhaitez
+        sku_total['ItemName'] = sku_total['ItemName'].replace({
+            'La Blonde sans alcool': 'BLO Sans Alcool',
+            'La Blanche sans alcool': 'BLA Sans Alcool'
+        })
+
         col_chart, col_table = st.columns([2, 1])
         with col_chart:
-            fig = px.bar(sku_total, x='ItemName', y='LineQty', text_auto=True, color='LineQty', color_continuous_scale='Viridis')
+            # On ajoute barmode='group' pour bien séparer les barres
+            fig = px.bar(sku_total, 
+                         x='ItemName', 
+                         y='LineQty', 
+                         text_auto=True, 
+                         color='ItemName', # Couleur différente par produit pour mieux les distinguer
+                         title="Détail des ventes par SKU",
+                         barmode='group') 
+            
+            # Pour éviter que les noms se chevauchent sur l'axe X
+            fig.update_layout(xaxis_tickangle=-45)
+            
             st.plotly_chart(fig, use_container_width=True)
         with col_table:
             st.dataframe(sku_total, use_container_width=True, hide_index=True)
