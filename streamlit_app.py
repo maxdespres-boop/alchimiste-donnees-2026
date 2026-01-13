@@ -14,8 +14,8 @@ folder_id = "VOTRE_ID_DE_DOSSIER_ICI"
 
 @st.cache_data(ttl=3600) # Rafraîchit les données toutes les heures
 def load_data():
-files = conn.fs.ls(f"{folder_id}")
-files = [f for f in files if f.upper().endswith(".CSV")]    df_list = []
+    files = conn.fs.ls(f"{folder_id}")
+    files = [f for f in files if f.upper().endswith(".CSV")]    df_list = []
     for file in files:
         with conn.fs.open(file, 'rb') as f:
             # On utilise le séparateur ',' tel que vu dans votre fichier F001005.CSV
