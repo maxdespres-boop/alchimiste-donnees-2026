@@ -108,20 +108,27 @@ try:
 
         st.divider()
 
-        # --- 5. BANNIÈRES ET GRILLE ---
-        col_pie, col_grid = st.columns([1, 1])
-        with col_pie:
-            st.subheader("🏢 Par Bannière")
-            ban_total = df.groupby('GroupName')['LineQty'].sum().reset_index().sort_values('LineQty', ascending=False)
-            st.plotly_chart(px.pie(ban_total, values='LineQty', names='GroupName', hole=0.4, 
-                                  color_discrete_sequence=px.colors.sequential.Viridis), use_container_width=True)
-            st.dataframe(ban_total, use_container_width=True, hide_index=True)
+        # --- 5. GRILLE ET BANNIÈRES (INVERSÉS) ---
+        col_grid, col_pie = st.columns([1.2, 0.8]) # On donne un peu plus de largeur à la grille
         
         with col_grid:
             st.subheader("📅 Détail Quotidien")
-            pivot_day = df.pivot_table(index='ItemName', columns=df['DocDate'].dt.strftime('%Y-%m-%d'), 
-                                       values='LineQty', aggfunc='sum', fill_value=0)
+            # Pivot des données pour la grille
+            pivot_day = df.pivot_table(index='ItemName', 
+                                       columns=df['DocDate'].dt.strftime('%Y-%m-%d'), 
+                                       values='LineQty', 
+                                       aggfunc='sum', 
+                                       fill_value=0)
             st.dataframe(pivot_day, use_container_width=True)
+        
+        with col_pie:
+            st.subheader("🏢 Par Bannière")
+            ban_total = df.groupby('GroupName')['LineQty'].sum().reset_index().sort_values('LineQty', ascending=False)
+            # Graphique en beigne
+            st.plotly_chart(px.pie(ban_total, values='LineQty', names='GroupName', hole=0.4, 
+                                  color_discrete_sequence=px.colors.sequential.Viridis), use_container_width=True)
+            # Tableau des bannières
+            st.dataframe(ban_total, use_container_width=True, hide_index=True)
 
         # --- EXPORT EXCEL ---
         output = io.BytesIO()
