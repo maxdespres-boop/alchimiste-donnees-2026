@@ -8,7 +8,7 @@ import io
 st.set_page_config(page_title="Dashboard Ventes Alchimiste", layout="wide")
 
 # --- CONFIGURATION ---
-ID_DOSSIER = "1WwAn7E-M9tOfS6_27G3Dk3E0Xz1i_0_1" # Votre ID de dossier
+ID_DOSSIER = "1kclIHYXAdBV-Jzi_0ymmycqCUryil5oA" # Votre ID de dossier
 
 NOMS_COURTS = {
     'La Blonde sans alcool': 'BLO Sans Alcool',
