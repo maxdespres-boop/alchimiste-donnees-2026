@@ -1,94 +1,94 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-from st_files_connection import FilesConnection
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+import io
 
-# Configuration de la page
-st.set_page_config(page_title="Dashboard Ventes Alchimiste", layout="wide")
+st.set_page_config(page_title="Dashboard Ventes Pro", layout="wide")
 
-ID_DOSSIER = "1A2b3C4d5E6f7G8h9I0j_kLMnO_pQrStU"
+# --- CONFIGURATION ---
+ID_DOSSIER = "1kclIHYXAdBV-Jzi_0ymmycqCUryil5oA"
 
-conn = st.connection('gcs', type=FilesConnection)
+# --- AUTHENTIFICATION ---
+def get_gdrive_service():
+    # Récupération des secrets au format TOML
+    creds_dict = st.secrets["connections"]["gcs"]
+    creds = service_account.Credentials.from_service_account_info(creds_dict)
+    return build('drive', 'v3', credentials=creds)
 
-# @st.cache_data(ttl=3600)
-def load_data(folder_id):
-    clean_id = folder_id.strip().split('/')[-1]
-    try:
-        files = conn.fs.ls(f"gdrive://{clean_id}/")
-        st.success(f"Connexion réussie ! Fichiers trouvés : {len(files)}")
-        # ... (reste du code pour lire les CSV) ...
-    except Exception as e:
-        st.error(f"Détail technique de l'erreur : {str(e)}")
-        # Cela nous dira si c'est 'Permission Denied', 'Invalid Credentials' ou 'API not enabled'
+@st.cache_data(ttl=3600)
+def load_data_from_drive(folder_id):
+    service = get_gdrive_service()
+    
+    # 1. Lister les fichiers dans le dossier
+    query = f"'{folder_id}' in parents and name contains '.csv' and trashed = false"
+    results = service.files().list(q=query, fields="files(id, name)").execute()
+    items = results.get('files', [])
+
+    if not items:
         return None
 
-# Lancement du chargement
-df = load_data(ID_DOSSIER)
+    df_list = []
+    for item in items:
+        # 2. Télécharger le contenu du fichier
+        request = service.files().get_media(fileId=item['id'])
+        fh = io.BytesIO(request.execute())
+        
+        # 3. Lire le CSV (on garde vos paramètres : virgule et latin1)
+        df_temp = pd.read_csv(fh, sep=',', encoding='latin1')
+        df_list.append(df_temp)
 
-if df is not None:
-    # --- PRÉPARATION DES DONNÉES ---
-    df['DocDate'] = pd.to_datetime(df['DocDate'])
-    
-    st.title("📊 Analyse de ventes hebdomadaire")
-    st.markdown("---")
+    return pd.concat(df_list, ignore_index=True)
 
-    # --- SECTION 1 : INDICATEURS FINANCIERS ---
-    total_caisses = df['LineQty'].sum()
-    total_ventes = df['LineTotal'].sum()
-    total_rabais = df['Rabais'].sum()
-    # Formule : Rabais / (Ventes + Rabais)
-    pct_rabais = (total_rabais / (total_ventes + total_rabais)) * 100 if (total_ventes + total_rabais) != 0 else 0
+# --- CORPS DE L'APPLICATION ---
+try:
+    df = load_data_from_drive(ID_DOSSIER)
 
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Total Caisses", f"{total_caisses:,.0f}")
-    col2.metric("Ventes Totales", f"{total_ventes:,.2f} $")
-    col3.metric("Total Rabais", f"{total_rabais:,.2f} $")
-    col4.metric("% Rabais", f"{pct_rabais:.2f} %")
+    if df is not None:
+        df['DocDate'] = pd.to_datetime(df['DocDate'])
+        
+        st.title("📊 Rapport de Ventes Alchimiste")
+        
+        # --- KPI ---
+        total_caisses = df['LineQty'].sum()
+        total_ventes = df['LineTotal'].sum()
+        total_rabais = df['Rabais'].sum()
+        denominateur = total_ventes + total_rabais
+        pct_rabais = (total_rabais / denominateur * 100) if denominateur != 0 else 0
 
-    # --- SECTION 2 : VENTES PAR SKU (EN CAISSES) ---
-    st.header("📦 Ventes par SKU")
-    # Groupement par ItemCode pour la précision, affichage avec ItemName
-    sku_data = df.groupby(['ItemCode', 'ItemName'])['LineQty'].sum().reset_index()
-    sku_data = sku_data.sort_values('LineQty', ascending=False)
-    
-    fig_sku = px.bar(sku_data, x='ItemName', y='LineQty', 
-                     title="Total des caisses par produit",
-                     labels={'ItemName': 'Produit', 'LineQty': 'Caisses'},
-                     text_auto='.2s')
-    st.plotly_chart(fig_sku, use_container_width=True)
-    st.dataframe(sku_data, use_container_width=True)
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Total Caisses", f"{total_caisses:,.0f}")
+        c2.metric("Ventes ($)", f"{total_ventes:,.2f} $")
+        c3.metric("Total Rabais ($)", f"{total_rabais:,.2f} $")
+        c4.metric("% Rabais", f"{pct_rabais:.2f} %")
 
-    # --- SECTION 3 : VENTES PAR SKU PAR JOUR ---
-    st.header("📅 Détail Quotidien par SKU")
-    sku_day = df.groupby(['DocDate', 'ItemCode', 'ItemName'])['LineQty'].sum().reset_index()
-    # Pivot pour mettre les dates en colonnes
-    sku_day_pivot = sku_day.pivot_table(index=['ItemCode', 'ItemName'], 
+        # --- GRAPHIQUE SKU ---
+        st.header("📦 Ventes par SKU")
+        sku_data = df.groupby(['ItemCode', 'ItemName'])['LineQty'].sum().reset_index().sort_values('LineQty', ascending=False)
+        st.plotly_chart(px.bar(sku_data, x='ItemName', y='LineQty', text_auto=True), use_container_width=True)
+
+        # --- SKU PAR JOUR ---
+        st.header("📅 Ventes par SKU et par Jour")
+        sku_day_pivot = df.pivot_table(index=['ItemCode', 'ItemName'], 
                                         columns=df['DocDate'].dt.strftime('%Y-%m-%d'), 
                                         values='LineQty', 
                                         aggfunc='sum', 
                                         fill_value=0)
-    st.dataframe(sku_day_pivot, use_container_width=True)
+        st.dataframe(sku_day_pivot, use_container_width=True)
 
-    # --- SECTION 4 : BANNIÈRES ET RÉGIONS ---
-    st.header("🏢 Analyse Segments")
-    c_left, c_right = st.columns(2)
-    
-    with c_left:
-        st.subheader("Par Bannière")
-        banniere_df = df.groupby('GroupName')['LineQty'].sum().reset_index()
-        fig_ban = px.pie(banniere_df, values='LineQty', names='GroupName', hole=0.3)
-        st.plotly_chart(fig_ban, use_container_width=True)
+        # --- RESTE DES ANALYSES ---
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.subheader("Par Bannière")
+            st.plotly_chart(px.pie(df, values='LineQty', names='GroupName'), use_container_width=True)
+        with col_b:
+            st.subheader("Par Région")
+            st.dataframe(df.groupby('CityS')['LineQty'].sum().sort_values(ascending=False))
 
-    with c_right:
-        st.subheader("Par Région (CityS)")
-        region_df = df.groupby('CityS')['LineQty'].sum().reset_index().sort_values('LineQty', ascending=False)
-        st.dataframe(region_df, use_container_width=True)
+    else:
+        st.warning("Aucun fichier CSV trouvé. Vérifiez l'ID du dossier et le partage avec le compte de service.")
 
-    # --- SECTION 5 : REPRÉSENTANTS ---
-    st.header("👥 Performance des Représentants")
-    rep_df = df.groupby('RefPartenaire')['LineQty'].sum().reset_index().sort_values('LineQty', ascending=False)
-    fig_rep = px.bar(rep_df, x='RefPartenaire', y='LineQty', color='LineQty')
-    st.plotly_chart(fig_rep, use_container_width=True)
-
-else:
-    st.warning("⚠️ En attente de données... Vérifiez que vos fichiers CSV sont bien dans le dossier Drive et que le dossier est partagé avec l'adresse du compte de service.")
+except Exception as e:
+    st.error(f"Erreur d'accès : {e}")
+    st.info("Vérifiez que l'API Google Drive est bien activée dans la console Google Cloud.")
