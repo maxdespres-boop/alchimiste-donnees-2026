@@ -41,7 +41,7 @@ try:
     if df_raw is not None:
         df_raw['DocDate'] = pd.to_datetime(df_raw['DocDate'])
         
-        # --- FILTRE DE DATE ---
+        # --- FILTRE DE DATE (SIDEBAR) ---
         st.sidebar.header("📅 Période d'analyse")
         min_date = df_raw['DocDate'].min().date()
         max_date = df_raw['DocDate'].max().date()
@@ -102,7 +102,7 @@ try:
 
         st.divider()
 
-        # --- 5. ANALYSE BANNIÈRES (Graphique à gauche, Tableau à droite) ---
+        # --- 5. ANALYSE BANNIÈRES ---
         st.header("🏢 Ventes par Bannière")
         col_pie, col_table_ban = st.columns([1, 1])
         ban_total = df.groupby('GroupName')['LineQty'].sum().reset_index().sort_values('LineQty', ascending=False)
@@ -110,15 +110,22 @@ try:
         with col_pie:
             st.plotly_chart(px.pie(ban_total, values='LineQty', names='GroupName', hole=0.4, 
                                   color_discrete_sequence=px.colors.sequential.Viridis), use_container_width=True)
-        
         with col_table_ban:
-            st.write("###") # Petit espace pour aligner
+            st.write("###") 
             st.dataframe(ban_total, use_container_width=True, hide_index=True)
 
         st.divider()
 
-        # --- 6. GRILLE QUOTIDIENNE (Plein écran en bas) ---
-        st.header("📅 Détail Quotidien")
+        # --- 6. GRILLE MENSUELLE (NOUVEAU) ---
+        st.header("📅 Ventes par Mois")
+        # On crée une colonne Mois (Format: 2024-01)
+        df['Mois'] = df['DocDate'].dt.to_period('M').astype(str)
+        pivot_month = df.pivot_table(index='ItemName', columns='Mois', 
+                                     values='LineQty', aggfunc='sum', fill_value=0)
+        st.dataframe(pivot_month, use_container_width=True)
+
+        # --- 7. GRILLE QUOTIDIENNE ---
+        st.header("📆 Détail Quotidien")
         pivot_day = df.pivot_table(index='ItemName', columns=df['DocDate'].dt.strftime('%Y-%m-%d'), 
                                    values='LineQty', aggfunc='sum', fill_value=0)
         st.dataframe(pivot_day, use_container_width=True)
@@ -129,6 +136,7 @@ try:
             sku_total.to_excel(writer, sheet_name='Produits', index=False)
             if 'CardCode' in df.columns: client_total.to_excel(writer, sheet_name='Clients', index=False)
             ban_total.to_excel(writer, sheet_name='Bannieres', index=False)
+            pivot_month.to_excel(writer, sheet_name='Mensuel')
             pivot_day.to_excel(writer, sheet_name='Quotidien')
         
         st.sidebar.divider()
