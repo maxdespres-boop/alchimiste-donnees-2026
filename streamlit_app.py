@@ -31,9 +31,19 @@ def load_data_from_drive(folder_id):
     for item in items:
         request = service.files().get_media(fileId=item['id'])
         fh = io.BytesIO(request.execute())
-        # MODIFICATION : on_bad_lines='skip' pour ignorer les lignes avec trop de colonnes
-        df_temp = pd.read_csv(fh, sep=',', encoding='latin1', on_bad_lines='skip')
+        
+        # --- LECTURE SÉCURISÉE POUR ÉVITER LES DOUBLONS DE LIGNES ---
+        df_temp = pd.read_csv(
+            fh, 
+            sep=',', 
+            encoding='latin1', 
+            quotechar='"',          # Crucial : ignore les virgules et retours à la ligne dans les adresses
+            on_bad_lines='skip',    # Saute les lignes vraiment corrompues
+            skip_blank_lines=True
+        )
         df_list.append(df_temp)
+    
+    if not df_list: return None
     return pd.concat(df_list, ignore_index=True)
 
 # --- CHARGEMENT ---
@@ -42,7 +52,7 @@ try:
     if df_raw is not None:
         df_raw['DocDate'] = pd.to_datetime(df_raw['DocDate'])
         
-        # --- FILTRE DE DATE (SIDEBAR) ---
+        # --- FILTRE DE DATE ---
         st.sidebar.header("📅 Période d'analyse")
         min_date = df_raw['DocDate'].min().date()
         max_date = df_raw['DocDate'].max().date()
@@ -76,18 +86,19 @@ try:
         pct_rabais = (total_rabais / (total_ventes + total_rabais) * 100) if (total_ventes + total_rabais) != 0 else 0
 
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Total Caisses", f"{total_caisses:,.0f}")
+        c1.metric("Total Caisses", f"{total_caisses:,.2f}")
         c2.metric("Ventes ($)", f"{total_ventes:,.2f} $")
         c3.metric("Total Rabais ($)", f"{total_rabais:,.2f} $")
         c4.metric("% Rabais", f"{pct_rabais:.2f} %")
 
-        # --- 3. VENTES PAR PRODUIT ---
+        # --- 3. VENTES PAR PRODUIT (STYLE VERT/BLEU) ---
         st.header("📦 Ventes par Produit (SKU)")
         sku_total = df.groupby(['ItemCode', 'ItemName'])['LineQty'].sum().reset_index().sort_values('LineQty', ascending=False)
         sku_total['ItemName'] = sku_total['ItemName'].replace(NOMS_COURTS)
 
         fig = px.bar(sku_total, x='ItemName', y='LineQty', color='LineQty', 
-                     text_auto=True, color_continuous_scale='Viridis')
+                     text_auto=True, color_continuous_scale='Viridis',
+                     labels={'LineQty': 'Caisses', 'ItemName': 'Produit'})
         fig.update_layout(xaxis_tickangle=-45, bargap=0.3) 
         st.plotly_chart(fig, use_container_width=True)
         st.dataframe(sku_total, use_container_width=True, hide_index=True)
@@ -107,7 +118,6 @@ try:
         st.header("🏢 Ventes par Bannière")
         col_pie, col_table_ban = st.columns([1, 1])
         ban_total = df.groupby('GroupName')['LineQty'].sum().reset_index().sort_values('LineQty', ascending=False)
-        
         with col_pie:
             st.plotly_chart(px.pie(ban_total, values='LineQty', names='GroupName', hole=0.4, 
                                   color_discrete_sequence=px.colors.sequential.Viridis), use_container_width=True)
@@ -129,7 +139,7 @@ try:
                                    values='LineQty', aggfunc='sum', fill_value=0)
         st.dataframe(pivot_day, use_container_width=True)
 
-        # --- EXPORT EXCEL AVEC TOTAUX EN GRAS ---
+        # --- EXPORT EXCEL AVEC TOTAUX ---
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             workbook = writer.book
@@ -141,23 +151,20 @@ try:
                 num_rows = len(dataframe)
                 num_cols = len(dataframe.columns) + (1 if has_index else 0)
                 worksheet.write(num_rows + 1, 0, "TOTAL GÉNÉRAL", format_bold)
-                start_col = 1
-                for col_num in range(start_col, num_cols):
+                for col_num in range(1, num_cols):
                     col_data = dataframe.iloc[:, col_num - (1 if has_index else 0)]
                     if pd.api.types.is_numeric_dtype(col_data):
-                        total_val = col_data.sum()
-                        worksheet.write(num_rows + 1, col_num, total_val, format_bold)
+                        worksheet.write(num_rows + 1, col_num, col_data.sum(), format_bold)
 
             write_sheet_with_total(sku_total, 'Produits')
-            if 'CardCode' in df.columns:
-                write_sheet_with_total(client_total, 'Clients')
+            if 'CardCode' in df.columns: write_sheet_with_total(client_total, 'Clients')
             write_sheet_with_total(ban_total, 'Bannieres')
             write_sheet_with_total(pivot_month, 'Mensuel', has_index=True)
             write_sheet_with_total(pivot_day, 'Quotidien', has_index=True)
         
         st.sidebar.divider()
         st.sidebar.download_button(label="📥 Télécharger Rapport Excel", data=output.getvalue(), 
-                                   file_name="Rapport_Ventes_Alchimiste.xlsx", 
+                                   file_name="Rapport_Alchimiste.xlsx", 
                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 except Exception as e:
