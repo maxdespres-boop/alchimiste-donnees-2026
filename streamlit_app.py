@@ -31,7 +31,8 @@ def load_data_from_drive(folder_id):
     for item in items:
         request = service.files().get_media(fileId=item['id'])
         fh = io.BytesIO(request.execute())
-        df_temp = pd.read_csv(fh, sep=',', encoding='latin1')
+        # MODIFICATION : on_bad_lines='skip' pour ignorer les lignes avec trop de colonnes
+        df_temp = pd.read_csv(fh, sep=',', encoding='latin1', on_bad_lines='skip')
         df_list.append(df_temp)
     return pd.concat(df_list, ignore_index=True)
 
@@ -41,7 +42,7 @@ try:
     if df_raw is not None:
         df_raw['DocDate'] = pd.to_datetime(df_raw['DocDate'])
         
-        # --- FILTRE DE DATE ---
+        # --- FILTRE DE DATE (SIDEBAR) ---
         st.sidebar.header("📅 Période d'analyse")
         min_date = df_raw['DocDate'].min().date()
         max_date = df_raw['DocDate'].max().date()
@@ -54,7 +55,7 @@ try:
         else:
             df = df_raw.copy()
 
-        # --- 1. FOCUS SEMAINE ---
+        # --- 1. TITRE ET FOCUS SEMAINE ---
         st.title("📊 Rapport de Ventes Alchimiste")
         latest_day = df_raw['DocDate'].max()
         start_of_last_week = latest_day - pd.Timedelta(days=6)
@@ -80,18 +81,20 @@ try:
         c3.metric("Total Rabais ($)", f"{total_rabais:,.2f} $")
         c4.metric("% Rabais", f"{pct_rabais:.2f} %")
 
-        # --- 3. SKU ---
+        # --- 3. VENTES PAR PRODUIT ---
         st.header("📦 Ventes par Produit (SKU)")
         sku_total = df.groupby(['ItemCode', 'ItemName'])['LineQty'].sum().reset_index().sort_values('LineQty', ascending=False)
         sku_total['ItemName'] = sku_total['ItemName'].replace(NOMS_COURTS)
-        fig = px.bar(sku_total, x='ItemName', y='LineQty', color='LineQty', text_auto=True, color_continuous_scale='Viridis')
+
+        fig = px.bar(sku_total, x='ItemName', y='LineQty', color='LineQty', 
+                     text_auto=True, color_continuous_scale='Viridis')
         fig.update_layout(xaxis_tickangle=-45, bargap=0.3) 
         st.plotly_chart(fig, use_container_width=True)
         st.dataframe(sku_total, use_container_width=True, hide_index=True)
 
         st.divider()
 
-        # --- 4. CLIENTS ---
+        # --- 4. VENTES PAR CLIENT ---
         st.header("👥 Ventes par Client")
         if 'CardCode' in df.columns and 'CardName' in df.columns:
             client_total = df.groupby(['CardCode', 'CardName'])['LineQty'].sum().reset_index().sort_values('LineQty', ascending=False)
@@ -100,12 +103,14 @@ try:
 
         st.divider()
 
-        # --- 5. BANNIÈRES ---
+        # --- 5. ANALYSE BANNIÈRES ---
         st.header("🏢 Ventes par Bannière")
         col_pie, col_table_ban = st.columns([1, 1])
         ban_total = df.groupby('GroupName')['LineQty'].sum().reset_index().sort_values('LineQty', ascending=False)
+        
         with col_pie:
-            st.plotly_chart(px.pie(ban_total, values='LineQty', names='GroupName', hole=0.4, color_discrete_sequence=px.colors.sequential.Viridis), use_container_width=True)
+            st.plotly_chart(px.pie(ban_total, values='LineQty', names='GroupName', hole=0.4, 
+                                  color_discrete_sequence=px.colors.sequential.Viridis), use_container_width=True)
         with col_table_ban:
             st.write("###") 
             st.dataframe(ban_total, use_container_width=True, hide_index=True)
@@ -120,7 +125,8 @@ try:
 
         # --- 7. GRILLE QUOTIDIENNE ---
         st.header("📆 Détail Quotidien")
-        pivot_day = df.pivot_table(index='ItemName', columns=df['DocDate'].dt.strftime('%Y-%m-%d'), values='LineQty', aggfunc='sum', fill_value=0)
+        pivot_day = df.pivot_table(index='ItemName', columns=df['DocDate'].dt.strftime('%Y-%m-%d'), 
+                                   values='LineQty', aggfunc='sum', fill_value=0)
         st.dataframe(pivot_day, use_container_width=True)
 
         # --- EXPORT EXCEL AVEC TOTAUX EN GRAS ---
@@ -129,26 +135,19 @@ try:
             workbook = writer.book
             format_bold = workbook.add_format({'bold': True, 'bg_color': '#D3D3D3', 'border': 1})
             
-            # Fonction pour écrire un onglet avec une ligne de total
             def write_sheet_with_total(dataframe, sheet_name, has_index=False):
                 dataframe.to_excel(writer, sheet_name=sheet_name, index=has_index)
                 worksheet = writer.sheets[sheet_name]
                 num_rows = len(dataframe)
                 num_cols = len(dataframe.columns) + (1 if has_index else 0)
-                
-                # Écrire "TOTAL" dans la première colonne
                 worksheet.write(num_rows + 1, 0, "TOTAL GÉNÉRAL", format_bold)
-                
-                # Calculer et écrire les sommes pour les colonnes numériques
-                start_col = 1 if not has_index else 1
+                start_col = 1
                 for col_num in range(start_col, num_cols):
-                    # On ne somme que si la colonne est numérique
                     col_data = dataframe.iloc[:, col_num - (1 if has_index else 0)]
                     if pd.api.types.is_numeric_dtype(col_data):
                         total_val = col_data.sum()
                         worksheet.write(num_rows + 1, col_num, total_val, format_bold)
 
-            # Application aux différents onglets
             write_sheet_with_total(sku_total, 'Produits')
             if 'CardCode' in df.columns:
                 write_sheet_with_total(client_total, 'Clients')
@@ -157,7 +156,7 @@ try:
             write_sheet_with_total(pivot_day, 'Quotidien', has_index=True)
         
         st.sidebar.divider()
-        st.sidebar.download_button(label="📥 Télécharger Rapport Excel avec Totaux", data=output.getvalue(), 
+        st.sidebar.download_button(label="📥 Télécharger Rapport Excel", data=output.getvalue(), 
                                    file_name="Rapport_Ventes_Alchimiste.xlsx", 
                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
