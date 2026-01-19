@@ -28,14 +28,12 @@ def load_data_from_drive(folder_id):
         df_list.append(df_temp)
     return pd.concat(df_list, ignore_index=True)
 
-# --- FONCTION DE CALCUL CAISSE ÉQUIVALENTE ---
 def calculer_caisse_eq(row):
     item_name = str(row['ItemName']).upper()
     qty = row['LineQty']
-    # Si c'est une caisse de 12, elle vaut 0.5 d'une caisse de 24
+    # Logique : Caisse de 12 = 0.5 d'une caisse de 24
     if "12" in item_name or "1/12" in str(row.get('Format', '')):
         return qty * 0.5
-    # Par défaut (pour les 4 packs ou formats 24), on garde 1:1
     return qty
 
 try:
@@ -46,7 +44,7 @@ try:
         for col in ['LineQty', 'LineTotal']:
             df_raw[col] = pd.to_numeric(df_raw[col], errors='coerce').fillna(0)
 
-        # Ajout de la colonne CAISSE EQ
+        # Ajout CAISSE EQ
         df_raw['CAISSE EQ'] = df_raw.apply(calculer_caisse_eq, axis=1)
 
         # Filtres Sidebar
@@ -64,47 +62,61 @@ try:
         df_week = df_raw[df_raw['DocDate'] >= start_week].copy()
         with st.expander(f"🔔 FOCUS : Dernière semaine reçue", expanded=True):
             week_sku = df_week.groupby(['ItemCode', 'ItemName']).agg({'LineQty': 'sum', 'CAISSE EQ': 'sum', 'LineTotal': 'sum'}).reset_index().sort_values('CAISSE EQ', ascending=False)
-            st.table(week_sku.rename(columns={'LineQty': 'Caisses (Physiques)', 'LineTotal': 'Total ($)'}))
+            st.table(week_sku.rename(columns={'LineQty': 'Caisses Physiques', 'LineTotal': 'Total ($)'}))
+
+        st.divider()
 
         # --- 2. KPI ---
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Total CAISSES EQ", f"{df['CAISSE EQ'].sum():,.2f}", help="Toutes les ventes converties en équivalent caisses de 24.")
-        c2.metric("Caisses Physiques", f"{df['LineQty'].sum():,.2f}")
+        c1.metric("Total CAISSES EQ", f"{df['CAISSE EQ'].sum():,.2f}")
+        c2.metric("Lignes de Ventes", len(df))
         c3.metric("Ventes ($)", f"{df['LineTotal'].sum():,.2f} $")
         c4.metric("Nb Factures", df['DocNum'].nunique())
 
         # --- 3. VENTES PAR PRODUIT ---
-        st.header("📦 Performance par Produit")
+        st.header("📦 Performance par Produit (SKU)")
         sku_total = df.groupby('ItemName').agg({'LineQty': 'sum', 'CAISSE EQ': 'sum'}).reset_index().sort_values('CAISSE EQ', ascending=False)
-        fig = px.bar(sku_total, x='ItemName', y='CAISSE EQ', color='CAISSE EQ', text_auto='.2f', color_continuous_scale='Viridis', labels={'CAISSE EQ': 'Caisses Eq (24)'})
+        fig = px.bar(sku_total, x='ItemName', y='CAISSE EQ', color='CAISSE EQ', text_auto='.2f', color_continuous_scale='Viridis')
         st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(sku_total, use_container_width=True, hide_index=True)
 
         # --- 4. BANNIÈRES ET CLIENTS ---
-        st.header("🏢 Analyse par Bannière")
-        if 'GroupName' in df.columns:
-            ban_total = df.groupby('GroupName').agg({'LineQty': 'sum', 'CAISSE EQ': 'sum'}).reset_index().sort_values('CAISSE EQ', ascending=False)
-            st.plotly_chart(px.pie(ban_total, values='CAISSE EQ', names='GroupName', hole=0.4, color_discrete_sequence=px.colors.sequential.Viridis), use_container_width=True)
-            st.dataframe(ban_total, use_container_width=True)
+        col_ban, col_cli = st.columns(2)
+        with col_ban:
+            st.header("🏢 Bannières")
+            if 'GroupName' in df.columns:
+                ban_total = df.groupby('GroupName')['CAISSE EQ'].sum().reset_index().sort_values('CAISSE EQ', ascending=False)
+                st.plotly_chart(px.pie(ban_total, values='CAISSE EQ', names='GroupName', hole=0.4, color_discrete_sequence=px.colors.sequential.Viridis), use_container_width=True)
+        with col_cli:
+            st.header("👥 Clients (Top 10)")
+            client_total = df.groupby('CardName')['CAISSE EQ'].sum().reset_index().sort_values('CAISSE EQ', ascending=False).head(10)
+            st.dataframe(client_total, use_container_width=True)
 
-        # --- 5. EXPORT EXCEL (AVEC NOUVEL ONGLET FOCUS) ---
+        st.divider()
+
+        # --- 5. CALENDRIER (RESTAURÉ) ---
+        st.header("📅 Calendrier des Ventes (Caisses EQ)")
+        df['Mois'] = df['DocDate'].dt.to_period('M').astype(str)
+        col_m, col_d = st.columns(2)
+        with col_m:
+            st.subheader("Par Mois")
+            pivot_m = df.pivot_table(index='ItemName', columns='Mois', values='CAISSE EQ', aggfunc='sum', fill_value=0)
+            st.dataframe(pivot_m, use_container_width=True)
+        with col_d:
+            st.subheader("Détail Quotidien")
+            pivot_d = df.pivot_table(index='ItemName', columns=df['DocDate'].dt.date, values='CAISSE EQ', aggfunc='sum', fill_value=0)
+            st.dataframe(pivot_d, use_container_width=True)
+
+        # --- 6. EXPORT EXCEL ---
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            workbook = writer.book
-            format_bold = workbook.add_format({'bold': True, 'bg_color': '#D3D3D3', 'border': 1})
-            
-            # Onglet 1: Focus dernière semaine (Nouveauté demandée)
             week_sku.to_excel(writer, sheet_name='Derniere_Semaine', index=False)
-            
-            # Onglets standards
-            sku_total.to_excel(writer, sheet_name='Produits', index=False)
-            if 'GroupName' in df.columns: ban_total.to_excel(writer, sheet_name='Bannieres', index=False)
-            
-            # Pivot mensuel en Caisses EQ
-            df.pivot_table(index='ItemName', columns=df['DocDate'].dt.to_period('M').astype(str), values='CAISSE EQ', aggfunc='sum', fill_value=0).to_excel(writer, sheet_name='Mensuel_EQ')
+            sku_total.to_excel(writer, sheet_name='Produits_Global', index=False)
+            pivot_m.to_excel(writer, sheet_name='Mensuel_EQ')
+            pivot_d.to_excel(writer, sheet_name='Quotidien_EQ')
+            if 'GroupName' in df.columns: ban_total.to_excel(writer, sheet_name='Bannieres')
 
         st.sidebar.divider()
-        st.sidebar.download_button("📥 Télécharger Rapport Excel Complet", output.getvalue(), "Rapport_Ventes_Alchimiste.xlsx")
+        st.sidebar.download_button("📥 Télécharger Rapport Excel", output.getvalue(), "Rapport_Ventes_Alchimiste.xlsx")
 
 except Exception as e:
     st.error(f"Erreur : {e}")
