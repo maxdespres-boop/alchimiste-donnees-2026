@@ -43,19 +43,20 @@ def harmoniser_formats(row):
     return pd.Series([qty, code])
 
 try:
-    df_raw = load_data_from_drive(ID_DOSSIER)
-    if df_raw is not None:
-        # Nettoyage de base
-        df_raw['DocDate'] = pd.to_datetime(df_raw['DocDate'], errors='coerce')
-        df_raw = df_raw.dropna(subset=['DocDate'])
+    df_raw_all = load_data_from_drive(ID_DOSSIER)
+    if df_raw_all is not None:
+        # Nettoyage et Élimination de 2024
+        df_raw_all['DocDate'] = pd.to_datetime(df_raw_all['DocDate'], errors='coerce')
+        df_raw = df_raw_all[df_raw_all['DocDate'].dt.year >= 2025].dropna(subset=['DocDate']).copy()
+        
         for col in ['LineQty', 'LineTotal', 'Rabais']:
             df_raw[col] = pd.to_numeric(df_raw[col], errors='coerce').fillna(0)
         
-        # Logique de conversion 12/24 et années
         df_raw[['CAISSE EQ', 'SKU_BASE']] = df_raw.apply(harmoniser_formats, axis=1)
         df_raw['Année'] = df_raw['DocDate'].dt.year
         df_raw['Mois_Num'] = df_raw['DocDate'].dt.month
         df_raw['Mois_Nom'] = df_raw['DocDate'].dt.strftime('%m - %B')
+        df_raw['Jour_Annee'] = df_raw['DocDate'].dt.dayofyear
 
         # --- FILTRES SIDEBAR ---
         st.sidebar.header("⚙️ Contrôles")
@@ -71,7 +72,6 @@ try:
         date_sel = st.sidebar.date_input("Filtrer la vue globale", value=st.session_state.date_range)
         st.session_state.date_range = date_sel
 
-        # Filtrage pour la vue de détail (Basée sur le sélectionneur)
         if isinstance(date_sel, tuple) and len(date_sel) == 2:
             df_detail = df_raw[(df_raw['DocDate'].dt.date >= date_sel[0]) & (df_raw['DocDate'].dt.date <= date_sel[1])].copy()
         else:
@@ -85,47 +85,49 @@ try:
         with st.expander(f"🔔 FOCUS : Derniers 7 jours reçus (jusqu'au {latest_day.strftime('%Y-%m-%d')})", expanded=True):
             st.table(df_week.groupby(['SKU_BASE', 'ItemName']).agg({'LineQty': 'sum', 'CAISSE EQ': 'sum', 'LineTotal': 'sum'}).reset_index().rename(columns={'LineQty':'Qté Phys.', 'CAISSE EQ':'Eq. 24', 'LineTotal':'Ventes ($)'}))
 
-        # --- 2. KPI COMPILÉS (TOUJOURS YTD 2026 vs 2025) ---
+        # --- 2. KPI COMPILÉS (DYNAMIQUE YTD 2026 VS 2025) ---
         st.subheader("🎯 Performance YTD Automatique")
-        df_2026 = df_raw[df_raw['Année'] == 2026]
-        df_2025 = df_raw[df_raw['Année'] == 2025]
         
+        # 2026 YTD (Cumul annuel jusqu'à aujourd'hui)
+        df_2026 = df_raw[df_raw['Année'] == 2026]
         total_eq_2026 = df_2026['CAISSE EQ'].sum()
         total_rabais_2026 = df_2026['Rabais'].sum()
         ventes_brutes_2026 = df_2026['LineTotal'].sum() + total_rabais_2026
         pct_rabais = (total_rabais_2026 / ventes_brutes_2026 * 100) if ventes_brutes_2026 != 0 else 0
-        total_eq_2025_full = df_2025['CAISSE EQ'].sum()
+        
+        # 2025 YTD (On filtre 2025 pour s'arrêter au même jour de l'année que 2026)
+        max_day_2026 = df_2026['Jour_Annee'].max() if not df_2026.empty else 366
+        df_2025_ytd = df_raw[(df_raw['Année'] == 2025) & (df_raw['Jour_Annee'] <= max_day_2026)]
+        total_eq_2025_ytd = df_2025_ytd['CAISSE EQ'].sum()
 
         k1, k2, k3, k4 = st.columns(4)
         k1.metric("CAISSES EQ 2026", f"{total_eq_2026:,.1f}")
         k2.metric("RABAIS 2026", f"{total_rabais_2026:,.2f} $")
         k3.metric("% DE RABAIS", f"{pct_rabais:.2f} %")
-        k4.metric("CAISSES EQ 2025 (TOTAL)", f"{total_eq_2025_full:,.1f}")
+        k4.metric("CAISSES EQ 2025 (YTD)", f"{total_eq_2025_ytd:,.1f}", 
+                  delta=f"{total_eq_2026 - total_eq_2025_ytd:,.1f} vs an dernier", delta_color="normal")
 
         st.divider()
 
         # --- 3. ANALYSE MENSUELLE & YoY ---
-        st.header("📈 Comparaison Annuelle Mensuelle (YoY)")
-        # Pivot pour le graphique et le tableau YoY
+        st.header("📈 Comparaison Mensuelle (2025-2026)")
         yoy_pivot = df_raw.pivot_table(index='Mois_Nom', columns='Année', values='CAISSE EQ', aggfunc='sum').fillna(0)
         
         col_graph, col_tab_yoy = st.columns([3, 2])
         with col_graph:
-            st.plotly_chart(px.line(yoy_pivot.reset_index(), x='Mois_Nom', y=yoy_pivot.columns, markers=True, title="Volume par mois (EQ 24)"), use_container_width=True)
+            st.plotly_chart(px.line(yoy_pivot.reset_index(), x='Mois_Nom', y=yoy_pivot.columns, markers=True), use_container_width=True)
         with col_tab_yoy:
-            st.write("**Volumes Mensuels par Année**")
             st.dataframe(yoy_pivot.style.format("{:.1f}"), use_container_width=True)
 
         st.divider()
 
-        # --- 4. BANNIÈRES & CLIENTS (Basé sur le filtre de date) ---
+        # --- 4. BANNIÈRES & CLIENTS ---
         col_ban, col_cli = st.columns(2)
         with col_ban:
             st.header("🏢 Top Bannières")
             if 'GroupName' in df_detail.columns:
                 ban_data = df_detail.groupby('GroupName')['CAISSE EQ'].sum().reset_index()
                 st.plotly_chart(px.pie(ban_data, values='CAISSE EQ', names='GroupName', hole=0.4, color_discrete_sequence=px.colors.sequential.Viridis), use_container_width=True)
-        
         with col_cli:
             st.header("👥 Top 15 Clients")
             if 'CardName' in df_detail.columns:
@@ -134,10 +136,10 @@ try:
 
         st.divider()
 
-        # --- 5. DÉTAIL PRODUITS (Basé sur le filtre de date) ---
+        # --- 5. DÉTAIL PRODUITS ---
         st.header("📦 Détail par Produit sur la période")
         sku_data = df_detail.groupby('ItemName').agg({'LineQty':'sum', 'CAISSE EQ':'sum', 'LineTotal':'sum'}).sort_values('CAISSE EQ', ascending=False)
         st.dataframe(sku_data.rename(columns={'LineQty':'Qté Phys.', 'CAISSE EQ':'Eq. 24', 'LineTotal':'Total ($)'}), use_container_width=True)
 
 except Exception as e:
-    st.error(f"Une erreur est survenue lors du chargement : {e}")
+    st.error(f"Erreur : {e}")
