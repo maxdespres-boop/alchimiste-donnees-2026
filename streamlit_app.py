@@ -58,20 +58,30 @@ try:
         df_raw['Mois_Nom'] = df_raw['DocDate'].dt.strftime('%m - %B')
         df_raw['Jour_Annee'] = df_raw['DocDate'].dt.dayofyear
 
-        # --- FILTRES SIDEBAR ---
+        # --- GESTION DU FILTRE DE DATE (Correction Reset) ---
         st.sidebar.header("⚙️ Contrôles")
         start_ytd_2026 = date(2026, 1, 1)
         end_today = date.today()
-        
-        if st.sidebar.button("🔄 Reset YTD (Jan 2026)"):
-            st.session_state.date_range = (start_ytd_2026, end_today)
-        
-        if 'date_range' not in st.session_state:
-            st.session_state.date_range = (start_ytd_2026, end_today)
-            
-        date_sel = st.sidebar.date_input("Filtrer la vue globale", value=st.session_state.date_range)
-        st.session_state.date_range = date_sel
 
+        # Fonction de réinitialisation
+        def reset_ytd():
+            st.session_state["date_picker_key"] = (start_ytd_2026, end_today)
+
+        # Si l'état n'existe pas, on l'initialise
+        if "date_picker_key" not in st.session_state:
+            reset_ytd()
+
+        # Bouton Reset
+        st.sidebar.button("🔄 Reset YTD (Jan 2026)", on_click=reset_ytd)
+
+        # Sélecteur de date utilisant le session_state
+        date_sel = st.sidebar.date_input(
+            "Filtrer la vue globale", 
+            value=st.session_state["date_picker_key"],
+            key="date_picker_key"
+        )
+
+        # Filtrage dynamique
         if isinstance(date_sel, tuple) and len(date_sel) == 2:
             df_detail = df_raw[(df_raw['DocDate'].dt.date >= date_sel[0]) & (df_raw['DocDate'].dt.date <= date_sel[1])].copy()
         else:
@@ -87,15 +97,12 @@ try:
 
         # --- 2. KPI COMPILÉS (DYNAMIQUE YTD 2026 VS 2025) ---
         st.subheader("🎯 Performance YTD Automatique")
-        
-        # 2026 YTD (Cumul annuel jusqu'à aujourd'hui)
         df_2026 = df_raw[df_raw['Année'] == 2026]
         total_eq_2026 = df_2026['CAISSE EQ'].sum()
         total_rabais_2026 = df_2026['Rabais'].sum()
         ventes_brutes_2026 = df_2026['LineTotal'].sum() + total_rabais_2026
         pct_rabais = (total_rabais_2026 / ventes_brutes_2026 * 100) if ventes_brutes_2026 != 0 else 0
         
-        # 2025 YTD (On filtre 2025 pour s'arrêter au même jour de l'année que 2026)
         max_day_2026 = df_2026['Jour_Annee'].max() if not df_2026.empty else 366
         df_2025_ytd = df_raw[(df_raw['Année'] == 2025) & (df_raw['Jour_Annee'] <= max_day_2026)]
         total_eq_2025_ytd = df_2025_ytd['CAISSE EQ'].sum()
