@@ -42,16 +42,16 @@ def harmoniser_formats_alc(row):
     code = str(row['ItemCode']).strip()
     qty = row['LineQty']
     if code.endswith('12'):
-        return pd.Series([qty * 0.5, code[:-2]]) # Vers format 24
+        return pd.Series([qty * 0.5, code[:-2]]) # Alchimiste : 12 -> 0.5 (base 24)
     return pd.Series([qty, code])
 
 def harmoniser_formats_loop(row):
     code = str(row['ItemCode']).strip()
     qty = row['LineQty']
-    # LOOP cible le format 12. Si c'est un format 24 (pas de 12), on double.
-    if not code.endswith('12'):
-        return pd.Series([qty * 2, code])
-    return pd.Series([qty, code[:-2]])
+    # LOOP : On ne touche pas à la quantité, tout est déjà en format 12.
+    if code.endswith('12'):
+        return pd.Series([qty, code[:-2]])
+    return pd.Series([qty, code])
 
 # --- NAVIGATION ---
 st.sidebar.title("🍺 Navigation")
@@ -75,26 +75,19 @@ try:
             label_unit = "Eq. 24"
         else:
             df_raw[['CAISSE EQ', 'SKU_BASE']] = df_raw.apply(harmoniser_formats_loop, axis=1)
-            label_unit = "Eq. 12"
+            label_unit = "Caisses (12)"
 
         df_raw['Année'] = df_raw['DocDate'].dt.year
         df_raw['Mois_Num'] = df_raw['DocDate'].dt.month
         df_raw['Mois_Nom'] = df_raw['DocDate'].dt.strftime('%m - %B')
         df_raw['Jour_Annee'] = df_raw['DocDate'].dt.dayofyear
 
-        # ==========================================
-        # PAGE ALCHIMISTE (VOTRE VERSION ORIGINALE)
-        # ==========================================
         if page == "Alchimiste":
-            # Filtre temporel Alchimiste
             df_alc = df_raw[df_raw['Année'] >= 2025].copy()
-
-            # --- FILTRES SIDEBAR ---
             st.sidebar.divider()
             st.sidebar.header("⚙️ Contrôles Alchimiste")
             start_ytd_2026 = date(2026, 1, 1)
-            end_today = date.today()
-            def reset_ytd(): st.session_state["date_picker_key"] = (start_ytd_2026, end_today)
+            def reset_ytd(): st.session_state["date_picker_key"] = (start_ytd_2026, date.today())
             if "date_picker_key" not in st.session_state: reset_ytd()
             st.sidebar.button("🔄 Reset YTD (Jan 2026)", on_click=reset_ytd)
             date_sel = st.sidebar.date_input("Filtrer la vue globale", value=st.session_state["date_picker_key"], key="date_picker_key")
@@ -110,11 +103,10 @@ try:
             latest_day = df_alc['DocDate'].max()
             df_week = df_alc[df_alc['DocDate'] >= (latest_day - pd.Timedelta(days=6))].copy()
             week_summary = df_week.groupby(['SKU_BASE', 'ItemName']).agg({'LineQty': 'sum', 'CAISSE EQ': 'sum', 'LineTotal': 'sum'}).reset_index()
-            with st.expander(f"🔔 FOCUS : Derniers 7 jours reçus (jusqu'au {latest_day.strftime('%Y-%m-%d')})", expanded=True):
+            with st.expander(f"🔔 FOCUS : Derniers 7 jours reçus", expanded=True):
                 st.table(week_summary.rename(columns={'LineQty':'Qté Phys.', 'CAISSE EQ':label_unit, 'LineTotal':'Ventes ($)'}))
 
-            # 2. KPI COMPILÉS
-            st.subheader("🎯 Performance YTD Automatique")
+            # 2. KPI
             df_2026 = df_alc[df_alc['Année'] == 2026]
             total_eq_2026 = df_2026['CAISSE EQ'].sum()
             total_rabais_2026 = df_2026['Rabais'].sum()
@@ -131,38 +123,29 @@ try:
             k3.metric("% DE RABAIS", f"{pct_rabais:.2f} %")
             k4.metric("CAISSES EQ 2025 (YTD)", f"{total_eq_2025_ytd:,.1f}", delta=f"{total_eq_2026 - total_eq_2025_ytd:,.1f} vs an dernier")
 
-            st.divider()
-
-            # 3. ANALYSE MENSUELLE & YoY
+            # 3. Graphique YoY
             st.header("📈 Comparaison Mensuelle (2025-2026)")
             yoy_pivot = df_alc.pivot_table(index='Mois_Nom', columns='Année', values='CAISSE EQ', aggfunc='sum').fillna(0)
-            col_graph, col_tab_yoy = st.columns([3, 2])
-            with col_graph:
-                st.plotly_chart(px.line(yoy_pivot.reset_index(), x='Mois_Nom', y=yoy_pivot.columns, markers=True), use_container_width=True)
-            with col_tab_yoy:
-                st.dataframe(yoy_pivot.style.format("{:.1f}"), use_container_width=True)
+            c1, c2 = st.columns([3, 2])
+            with c1: st.plotly_chart(px.line(yoy_pivot.reset_index(), x='Mois_Nom', y=yoy_pivot.columns, markers=True), use_container_width=True)
+            with c2: st.dataframe(yoy_pivot.style.format("{:.1f}"), use_container_width=True)
 
-            st.divider()
-
-            # 4. BANNIÈRES & CLIENTS
-            col_ban, col_cli = st.columns(2)
-            with col_ban:
+            # 4. Bannières & Clients
+            cb, cc = st.columns(2)
+            with cb:
                 st.header("🏢 Top Bannières")
                 if 'GroupName' in df_detail.columns:
-                    ban_data = df_detail.groupby('GroupName')['CAISSE EQ'].sum().reset_index()
-                    st.plotly_chart(px.pie(ban_data, values='CAISSE EQ', names='GroupName', hole=0.4), use_container_width=True)
-            with col_cli:
+                    st.plotly_chart(px.pie(df_detail.groupby('GroupName')['CAISSE EQ'].sum().reset_index(), values='CAISSE EQ', names='GroupName', hole=0.4), use_container_width=True)
+            with cc:
                 st.header("👥 Top 15 Clients")
-                client_data = df_detail.groupby('CardName')['CAISSE EQ'].sum().reset_index().sort_values('CAISSE EQ', ascending=False).head(15)
-                st.dataframe(client_data.rename(columns={'CardName':'Client','CAISSE EQ':label_unit}), use_container_width=True, hide_index=True)
+                st.dataframe(df_detail.groupby('CardName')['CAISSE EQ'].sum().reset_index().sort_values('CAISSE EQ', ascending=False).head(15).rename(columns={'CardName':'Client','CAISSE EQ':label_unit}), use_container_width=True, hide_index=True)
 
-            # 5. DÉTAIL PRODUITS
+            # 5. Détail Produits
             st.header("📦 Détail par Produit sur la période")
             sku_data = df_detail.groupby('ItemName').agg({'LineQty':'sum', 'CAISSE EQ':'sum', 'LineTotal':'sum'}).sort_values('CAISSE EQ', ascending=False)
             st.dataframe(sku_data.rename(columns={'LineQty':'Qté Phys.', 'CAISSE EQ':label_unit, 'LineTotal':'Total ($)'}), use_container_width=True)
 
-            # EXPORT EXCEL
-            st.sidebar.divider()
+            # Export Excel
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 week_summary.to_excel(writer, sheet_name='Focus_Semaine', index=False)
@@ -170,29 +153,23 @@ try:
                 sku_data.to_excel(writer, sheet_name='Detail_Periode')
             st.sidebar.download_button(label="📥 Télécharger Rapport Alchimiste", data=output.getvalue(), file_name=f"Rapport_Alchimiste_{date.today()}.xlsx")
 
-        # ==========================================
-        # PAGE LOOP (FORMAT 12 & INCLUSION 2025)
-        # ==========================================
         elif page == "LOOP":
-            # Pour LOOP, on inclut tout à partir de 2025
             df_loop = df_raw[df_raw['Année'] >= 2025].copy()
             st.title("🍹 Rapport de Ventes : LOOP (Format 12)")
             
-            if df_loop.empty:
-                st.info("Aucune donnée trouvée dans le dossier LOOP pour 2025-2026.")
-            else:
+            if not df_loop.empty:
                 st.subheader("📦 Ventes par SKU (Cumulatif)")
                 sku_loop = df_loop.groupby('ItemName').agg({'LineQty':'sum', 'CAISSE EQ':'sum', 'LineTotal':'sum'}).sort_values('CAISSE EQ', ascending=False)
                 st.dataframe(sku_loop.rename(columns={'LineQty':'Qté Phys.', 'CAISSE EQ':label_unit, 'LineTotal':'Total ($)'}), use_container_width=True)
 
-                st.subheader("📅 Détail Mensuel (Caisses Eq. 12)")
+                st.subheader("📅 Détail Mensuel (Caisses 12)")
                 mensuel_loop = df_loop.pivot_table(index='ItemName', columns='Mois_Nom', values='CAISSE EQ', aggfunc='sum').fillna(0)
                 st.dataframe(mensuel_loop, use_container_width=True)
 
-                st.plotly_chart(px.bar(df_loop.groupby('Mois_Nom')['CAISSE EQ'].sum().reset_index(), x='Mois_Nom', y='CAISSE EQ', title="Volume mensuel global LOOP (Eq. 12)"), use_container_width=True)
+                st.plotly_chart(px.bar(df_loop.groupby('Mois_Nom')['CAISSE EQ'].sum().reset_index(), x='Mois_Nom', y='CAISSE EQ', title="Volume mensuel LOOP"), use_container_width=True)
 
     else:
-        st.warning(f"Vérifiez l'ID du dossier {page} et les permissions de partage.")
+        st.warning(f"Veuillez configurer l'ID du dossier {page} dans le code.")
 
 except Exception as e:
-    st.error(f"Une erreur est survenue : {e}")
+    st.error(f"Erreur : {e}")
