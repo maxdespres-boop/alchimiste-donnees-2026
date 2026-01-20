@@ -9,8 +9,8 @@ from datetime import date
 st.set_page_config(page_title="Dashboard Alchimiste & LOOP", layout="wide")
 
 # --- CONFIGURATION DES DOSSIERS ---
-ID_DOSSIER_ALCHIMISTE = "1kclIHYXAdBV-Jzi_0ymmycqCUryil5oA"
-ID_DOSSIER_LOOP = "VOTRE_ID_DOSSIER_LOOP_ICI" # À remplacer par le vrai ID
+ID_DOSSIER_ALCHIMISTE = "1eTeWop4EVTDB9GbAPPixJZDcVYeZnauD"
+ID_DOSSIER_LOOP = "1LOTLoVm4-FJr96FQTOZzICrn-ZJmB4Pb" # À remplacer par le vrai ID
 
 def get_gdrive_service():
     creds_dict = st.secrets["connections"]["gcs"]
@@ -18,7 +18,7 @@ def get_gdrive_service():
 
 @st.cache_data(ttl=600)
 def load_data_from_drive(folder_id):
-    if folder_id == "VOTRE_ID_DOSSIER_LOOP_ICI": return None # Sécurité si non configuré
+    if folder_id == "1LOTLoVm4-FJr96FQTOZzICrn-ZJmB4Pb": return None # Sécurité si non configuré
     service = get_gdrive_service()
     query = f"'{folder_id}' in parents and (name contains '.csv' or name contains '.xlsx') and trashed = false"
     items = service.files().list(q=query, fields="files(id, name)").execute().get('files', [])
