@@ -58,30 +58,25 @@ try:
         df_raw['Mois_Nom'] = df_raw['DocDate'].dt.strftime('%m - %B')
         df_raw['Jour_Annee'] = df_raw['DocDate'].dt.dayofyear
 
-        # --- GESTION DU FILTRE DE DATE (Correction Reset) ---
+        # --- GESTION DU FILTRE DE DATE ---
         st.sidebar.header("⚙️ Contrôles")
         start_ytd_2026 = date(2026, 1, 1)
         end_today = date.today()
 
-        # Fonction de réinitialisation
         def reset_ytd():
             st.session_state["date_picker_key"] = (start_ytd_2026, end_today)
 
-        # Si l'état n'existe pas, on l'initialise
         if "date_picker_key" not in st.session_state:
             reset_ytd()
 
-        # Bouton Reset
         st.sidebar.button("🔄 Reset YTD (Jan 2026)", on_click=reset_ytd)
 
-        # Sélecteur de date utilisant le session_state
         date_sel = st.sidebar.date_input(
             "Filtrer la vue globale", 
             value=st.session_state["date_picker_key"],
             key="date_picker_key"
         )
 
-        # Filtrage dynamique
         if isinstance(date_sel, tuple) and len(date_sel) == 2:
             df_detail = df_raw[(df_raw['DocDate'].dt.date >= date_sel[0]) & (df_raw['DocDate'].dt.date <= date_sel[1])].copy()
         else:
@@ -92,10 +87,12 @@ try:
         # --- 1. FOCUS DERNIÈRE SEMAINE ---
         latest_day = df_raw['DocDate'].max()
         df_week = df_raw[df_raw['DocDate'] >= (latest_day - pd.Timedelta(days=6))].copy()
+        week_summary = df_week.groupby(['SKU_BASE', 'ItemName']).agg({'LineQty': 'sum', 'CAISSE EQ': 'sum', 'LineTotal': 'sum'}).reset_index()
+        
         with st.expander(f"🔔 FOCUS : Derniers 7 jours reçus (jusqu'au {latest_day.strftime('%Y-%m-%d')})", expanded=True):
-            st.table(df_week.groupby(['SKU_BASE', 'ItemName']).agg({'LineQty': 'sum', 'CAISSE EQ': 'sum', 'LineTotal': 'sum'}).reset_index().rename(columns={'LineQty':'Qté Phys.', 'CAISSE EQ':'Eq. 24', 'LineTotal':'Ventes ($)'}))
+            st.table(week_summary.rename(columns={'LineQty':'Qté Phys.', 'CAISSE EQ':'Eq. 24', 'LineTotal':'Ventes ($)'}))
 
-        # --- 2. KPI COMPILÉS (DYNAMIQUE YTD 2026 VS 2025) ---
+        # --- 2. KPI COMPILÉS ---
         st.subheader("🎯 Performance YTD Automatique")
         df_2026 = df_raw[df_raw['Année'] == 2026]
         total_eq_2026 = df_2026['CAISSE EQ'].sum()
@@ -134,19 +131,31 @@ try:
             st.header("🏢 Top Bannières")
             if 'GroupName' in df_detail.columns:
                 ban_data = df_detail.groupby('GroupName')['CAISSE EQ'].sum().reset_index()
-                st.plotly_chart(px.pie(ban_data, values='CAISSE EQ', names='GroupName', hole=0.4, color_discrete_sequence=px.colors.sequential.Viridis), use_container_width=True)
+                st.plotly_chart(px.pie(ban_data, values='CAISSE EQ', names='GroupName', hole=0.4), use_container_width=True)
         with col_cli:
             st.header("👥 Top 15 Clients")
-            if 'CardName' in df_detail.columns:
-                client_data = df_detail.groupby('CardName')['CAISSE EQ'].sum().reset_index().sort_values('CAISSE EQ', ascending=False).head(15)
-                st.dataframe(client_data.rename(columns={'CardName':'Client','CAISSE EQ':'Caisses EQ'}), use_container_width=True, hide_index=True)
-
-        st.divider()
+            client_data = df_detail.groupby('CardName')['CAISSE EQ'].sum().reset_index().sort_values('CAISSE EQ', ascending=False).head(15)
+            st.dataframe(client_data.rename(columns={'CardName':'Client','CAISSE EQ':'Caisses EQ'}), use_container_width=True, hide_index=True)
 
         # --- 5. DÉTAIL PRODUITS ---
         st.header("📦 Détail par Produit sur la période")
         sku_data = df_detail.groupby('ItemName').agg({'LineQty':'sum', 'CAISSE EQ':'sum', 'LineTotal':'sum'}).sort_values('CAISSE EQ', ascending=False)
         st.dataframe(sku_data.rename(columns={'LineQty':'Qté Phys.', 'CAISSE EQ':'Eq. 24', 'LineTotal':'Total ($)'}), use_container_width=True)
+
+        # --- EXPORT EXCEL (RESTAURÉ) ---
+        st.sidebar.divider()
+        output = io.BytesIO()
+        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+            week_summary.to_excel(writer, sheet_name='Focus_Semaine', index=False)
+            yoy_pivot.to_excel(writer, sheet_name='Performance_YTD')
+            sku_data.to_excel(writer, sheet_name='Detail_Periode')
+        
+        st.sidebar.download_button(
+            label="📥 Télécharger Rapport Excel",
+            data=output.getvalue(),
+            file_name=f"Rapport_Alchimiste_{date.today()}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
 except Exception as e:
     st.error(f"Erreur : {e}")
