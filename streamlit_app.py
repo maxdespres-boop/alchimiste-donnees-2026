@@ -18,7 +18,7 @@ def get_gdrive_service():
 
 @st.cache_data(ttl=600)
 def load_data_from_drive(folder_id):
-    if folder_id == "1LOTLoVm4-FJr96FQTOZzICrn-ZJmB4Pb": return None # Sécurité si non configuré
+    if folder_id == "ID_DOSSIER_LOOP": return None # Sécurité si non configuré
     service = get_gdrive_service()
     query = f"'{folder_id}' in parents and (name contains '.csv' or name contains '.xlsx') and trashed = false"
     items = service.files().list(q=query, fields="files(id, name)").execute().get('files', [])
