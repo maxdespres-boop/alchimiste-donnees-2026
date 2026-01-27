@@ -173,3 +173,8 @@ try:
 
 except Exception as e:
     st.error(f"Erreur : {e}")
+    
+# À ajouter pour déboguer
+if df_raw_all is not None:
+    st.write(f"Total brut dans les fichiers : {df_raw_all['LineTotal'].sum():,.2f} $")
+    st.write(f"Lignes avec dates invalides : {df_raw_all['DocDate'].isna().sum()}")
