@@ -178,16 +178,3 @@ except Exception as e:
 if df_raw_all is not None:
     st.write(f"Total brut dans les fichiers : {df_raw_all['LineTotal'].sum():,.2f} $")
     st.write(f"Lignes avec dates invalides : {df_raw_all['DocDate'].isna().sum()}")
-
-# --- BLOC DE DÉBOGAGE TEMPORAIRE ---
-st.subheader("🔍 Analyse de la différence")
-c1, c2, c3 = st.columns(3)
-with c1:
-    st.write("Total 2025 (Toute l'année) :")
-    st.write(df_alc[df_alc['Année'] == 2025]['LineTotal'].sum())
-with c2:
-    st.write("Total 2026 (Toute l'année) :")
-    st.write(df_alc[df_alc['Année'] == 2026]['LineTotal'].sum())
-with c3:
-    st.write("Montants négatifs (Retours) :")
-    st.write(df_alc[df_alc['LineTotal'] < 0]['LineTotal'].sum())
