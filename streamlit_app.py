@@ -124,6 +124,18 @@ try:
                 st.table(week_summary.rename(columns={'LineQty':'Qté Phys.', 'CAISSE EQ':label_unit, 'LineTotal':'Ventes ($)'}))
 
             # 2. KPI
+
+if page == "Alchimiste":
+    df_alc = df_raw[df_raw['Année'] >= 2025].copy()
+    
+    # --- BLOC DE DIAGNOSTIC ---
+    st.subheader("🔍 Diagnostic de conversion 2026")
+    diag_2026 = df_alc[df_alc['Année'] == 2026].head(10)
+    if not diag_2026.empty:
+        st.write("Voici comment l'app traite tes 10 premières lignes de 2026 :")
+        st.dataframe(diag_2026[['ItemCode', 'ItemName', 'LineQty', 'CAISSE EQ', 'LineTotal']])
+    # --------------------------
+
             df_2026 = df_alc[df_alc['Année'] == 2026]
             total_eq_2026 = df_2026['CAISSE EQ'].sum()
             total_rabais_2026 = df_2026['Rabais'].sum()
