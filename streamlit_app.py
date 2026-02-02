@@ -63,8 +63,15 @@ df_raw_all = load_data_from_drive(current_id)
 
 try:
     if df_raw_all is not None:
+        # --- TRAITEMENT DES DATES (Priorité Livraison) ---
         df_raw_all['DocDate'] = pd.to_datetime(df_raw_all['DocDate'], errors='coerce')
-        df_raw = df_raw_all.dropna(subset=['DocDate']).copy()
+        df_raw_all['DateLivraison'] = pd.to_datetime(df_raw_all['DateLivraison'], errors='coerce')
+        
+        # On crée la date pivot : Livraison, sinon DocDate
+        df_raw_all['DateAnalyse'] = df_raw_all['DateLivraison'].fillna(df_raw_all['DocDate'])
+        
+        # On filtre les lignes sans date
+        df_raw = df_raw_all.dropna(subset=['DateAnalyse']).copy()
         
         for col in ['LineQty', 'LineTotal', 'Rabais']:
             df_raw[col] = pd.to_numeric(df_raw[col], errors='coerce').fillna(0)
@@ -77,10 +84,11 @@ try:
             df_raw[['CAISSE EQ', 'SKU_BASE']] = df_raw.apply(harmoniser_formats_loop, axis=1)
             label_unit = "Caisses (12)"
 
-        df_raw['Année'] = df_raw['DocDate'].dt.year
-        df_raw['Mois_Num'] = df_raw['DocDate'].dt.month
-        df_raw['Mois_Nom'] = df_raw['DocDate'].dt.strftime('%m - %B')
-        df_raw['Jour_Annee'] = df_raw['DocDate'].dt.dayofyear
+        # Extraction des périodes basées sur DateAnalyse
+        df_raw['Année'] = df_raw['DateAnalyse'].dt.year
+        df_raw['Mois_Num'] = df_raw['DateAnalyse'].dt.month
+        df_raw['Mois_Nom'] = df_raw['DateAnalyse'].dt.strftime('%m - %B')
+        df_raw['Jour_Annee'] = df_raw['DateAnalyse'].dt.dayofyear
 
         if page == "Alchimiste":
             df_alc = df_raw[df_raw['Année'] >= 2025].copy()
@@ -90,20 +98,20 @@ try:
             def reset_ytd(): st.session_state["date_picker_key"] = (start_ytd_2026, date.today())
             if "date_picker_key" not in st.session_state: reset_ytd()
             st.sidebar.button("🔄 Reset YTD (Jan 2026)", on_click=reset_ytd)
-            date_sel = st.sidebar.date_input("Filtrer la vue globale", value=st.session_state["date_picker_key"], key="date_picker_key")
+            date_sel = st.sidebar.date_input("Filtrer la vue globale (Date Livraison)", value=st.session_state["date_picker_key"], key="date_picker_key")
 
             if isinstance(date_sel, tuple) and len(date_sel) == 2:
-                df_detail = df_alc[(df_alc['DocDate'].dt.date >= date_sel[0]) & (df_alc['DocDate'].dt.date <= date_sel[1])].copy()
+                df_detail = df_alc[(df_alc['DateAnalyse'].dt.date >= date_sel[0]) & (df_alc['DateAnalyse'].dt.date <= date_sel[1])].copy()
             else:
                 df_detail = df_alc.copy()
 
-            st.title("📊 Rapport de Ventes Alchimiste")
+            st.title("📊 Rapport Alchimiste (Basé sur Livraison)")
 
             # 1. FOCUS SEMAINE
-            latest_day = df_alc['DocDate'].max()
-            df_week = df_alc[df_alc['DocDate'] >= (latest_day - pd.Timedelta(days=6))].copy()
+            latest_day = df_alc['DateAnalyse'].max()
+            df_week = df_alc[df_alc['DateAnalyse'] >= (latest_day - pd.Timedelta(days=6))].copy()
             week_summary = df_week.groupby(['SKU_BASE', 'ItemName']).agg({'LineQty': 'sum', 'CAISSE EQ': 'sum', 'LineTotal': 'sum'}).reset_index()
-            with st.expander(f"🔔 FOCUS : Derniers 7 jours reçus", expanded=True):
+            with st.expander(f"🔔 FOCUS : Derniers 7 jours livrés (Jusqu'au {latest_day.strftime('%Y-%m-%d')})", expanded=True):
                 st.table(week_summary.rename(columns={'LineQty':'Qté Phys.', 'CAISSE EQ':label_unit, 'LineTotal':'Ventes ($)'}))
 
             # 2. KPI
@@ -124,7 +132,7 @@ try:
             k4.metric("CAISSES EQ 2025 (YTD)", f"{total_eq_2025_ytd:,.1f}", delta=f"{total_eq_2026 - total_eq_2025_ytd:,.1f} vs an dernier")
 
             # 3. Graphique YoY
-            st.header("📈 Comparaison Mensuelle (2025-2026)")
+            st.header("📈 Comparaison Mensuelle (Dates Livraison)")
             yoy_pivot = df_alc.pivot_table(index='Mois_Nom', columns='Année', values='CAISSE EQ', aggfunc='sum').fillna(0)
             c1, c2 = st.columns([3, 2])
             with c1: st.plotly_chart(px.line(yoy_pivot.reset_index(), x='Mois_Nom', y=yoy_pivot.columns, markers=True), use_container_width=True)
@@ -155,7 +163,7 @@ try:
 
         elif page == "LOOP":
             df_loop = df_raw[df_raw['Année'] >= 2025].copy()
-            st.title("🍹 Rapport de Ventes : LOOP (Format 12)")
+            st.title("🍹 Rapport de Ventes : LOOP (Basé sur Livraison)")
             
             if not df_loop.empty:
                 st.subheader("📦 Ventes par SKU (Cumulatif)")
@@ -173,8 +181,3 @@ try:
 
 except Exception as e:
     st.error(f"Erreur : {e}")
-    
-# À ajouter pour déboguer
-if df_raw_all is not None:
-    st.write(f"Total brut dans les fichiers : {df_raw_all['LineTotal'].sum():,.2f} $")
-    st.write(f"Lignes avec dates invalides : {df_raw_all['DocDate'].isna().sum()}")
