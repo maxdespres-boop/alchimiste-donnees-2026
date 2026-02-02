@@ -130,6 +130,53 @@ try:
             k3.metric("RABAIS 2026", f"{total_rabais_2026:,.2f} $")
             k4.metric(f"VOL. 2025 (YTD - {label_unit})", f"{total_eq_2025_ytd:,.1f}", delta=f"{total_eq_2026 - total_eq_2025_ytd:,.1f}")
 
+            # ... (Gardez le début du code identique jusqu'aux KPI) ...
+
+        if page == "Alchimiste":
+            df_alc = df_raw[df_raw['Année'] >= 2025].copy()
+            # ... (Logique de date picker) ...
+
+            st.title(f"📊 Rapport Alchimiste - Audit Volume vs Argent")
+
+            # --- CALCULS KPI YOY (ARGENT + VOLUME) ---
+            df_2026 = df_alc[df_alc['Année'] == 2026]
+            total_eq_2026 = df_2026['CAISSE EQ'].sum()
+            total_ventes_2026 = df_2026['LineTotal'].sum()
+            
+            max_day_2026 = df_2026['Jour_Annee'].max() if not df_2026.empty else 366
+            df_2025_ytd = df_alc[(df_alc['Année'] == 2025) & (df_alc['Jour_Annee'] <= max_day_2026)]
+            
+            total_eq_2025_ytd = df_2025_ytd['CAISSE EQ'].sum()
+            total_ventes_2025_ytd = df_2025_ytd['LineTotal'].sum()
+
+            # --- AFFICHAGE KPI ---
+            col1, col2 = st.columns(2)
+            with col1:
+                st.subheader("📦 Comparaison Volume")
+                k1, k2 = st.columns(2)
+                k1.metric(f"Vol. 2026 ({label_unit})", f"{total_eq_2026:,.0f}")
+                k2.metric(f"Vol. 2025 (YTD)", f"{total_eq_2025_ytd:,.0f}", delta=f"{total_eq_2026 - total_eq_2025_ytd:,.0f}")
+
+            with col2:
+                st.subheader("💰 Comparaison Argent")
+                k3, k4 = st.columns(2)
+                k3.metric("Ventes $ 2026", f"{total_ventes_2026:,.2f} $")
+                # Voici le test : Si ce delta est positif de 100k, mais le volume est négatif, le problème est la colonne LineQty
+                k4.metric("Ventes $ 2025 (YTD)", f"{total_ventes_2025_ytd:,.2f} $", delta=f"{total_ventes_2026 - total_ventes_2025_ytd:,.2f} $")
+
+            # --- GRAPHIQUES ---
+            tab1, tab2 = st.tabs(["📈 Graphique Volume", "💵 Graphique Argent"])
+            
+            with tab1:
+                yoy_vol = df_alc.pivot_table(index='Mois_Nom', columns='Année', values='CAISSE EQ', aggfunc='sum').fillna(0)
+                st.plotly_chart(px.line(yoy_vol.reset_index(), x='Mois_Nom', y=yoy_vol.columns, markers=True, title="Volume Mensuel (Eq. 12)"), use_container_width=True)
+            
+            with tab2:
+                yoy_val = df_alc.pivot_table(index='Mois_Nom', columns='Année', values='LineTotal', aggfunc='sum').fillna(0)
+                st.plotly_chart(px.line(yoy_val.reset_index(), x='Mois_Nom', y=yoy_val.columns, markers=True, title="Ventes Mensuelles ($)"), use_container_width=True)
+
+# ... (Reste du code identique) ...
+
             # Graphique YoY
             st.header("📈 Comparaison Mensuelle (Volume Eq. 12)")
             yoy_pivot = df_alc.pivot_table(index='Mois_Nom', columns='Année', values='CAISSE EQ', aggfunc='sum').fillna(0)
