@@ -6,7 +6,7 @@ from googleapiclient.discovery import build
 import io
 from datetime import date, timedelta
 
-st.set_page_config(page_title="Dashboard Alchimiste & LOOP - Master Final", layout="wide")
+st.set_page_config(page_title="Dashboard Alchimiste & LOOP - Master Intégral", layout="wide")
 
 # --- CONFIGURATION DRIVE ---
 ID_DOSSIER_ALCHIMISTE = "1eTeWop4EVTDB9GbAPPixJZDcVYeZnauD"
@@ -53,7 +53,7 @@ def harmoniser_formats_alc(row):
             return pd.Series([qty * 2, code])
         return pd.Series([qty, code])
 
-# --- FONCTION EXCEL (ALIGNÉE YTD) ---
+# --- FONCTION EXCEL (SANS BORDURES & ALIGNÉE) ---
 def generate_styled_excel(df_week, pivot_vol, pivot_val, pivot_sku, pivot_banner):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
@@ -69,7 +69,7 @@ def generate_styled_excel(df_week, pivot_vol, pivot_val, pivot_sku, pivot_banner
                 df_t['TOTAL'] = df_t.sum(axis=1, numeric_only=True)
             df_t.to_excel(writer, sheet_name=name)
             ws = writer.sheets[name]
-            ws.hide_gridlines(2)
+            ws.hide_gridlines(2) # Retire les bordures
             f = fmt_money if is_money else fmt_qty
             for i, col in enumerate(df_t.columns): ws.set_column(i+1, i+1, 18, f)
             ws.set_column(0, 0, 35)
@@ -87,11 +87,12 @@ page = st.sidebar.radio("Marque :", ["Alchimiste", "LOOP"])
 df_raw_all = load_data_from_drive(ID_DOSSIER_ALCHIMISTE if page == "Alchimiste" else ID_DOSSIER_LOOP)
 
 if df_raw_all is not None:
+    # Préparation générale
     df_raw_all['DocDate'] = pd.to_datetime(df_raw_all['DocDate'], errors='coerce')
-    df_raw_all['DateLivraison'] = pd.to_datetime(df_raw_all['DateLivraison'], errors='coerce')
-    df_raw_all['DateAnalyse'] = df_raw_all['DateLivraison'].fillna(df_raw_all['DocDate'])
+    df_raw_all['DateLivraison'] = pd.to_datetime(df_raw_all['DateLivraison'].fillna(df_raw_all['DocDate']), errors='coerce')
+    df_raw_all['DateAnalyse'] = df_raw_all['DateLivraison']
     
-    # Filtre 2025-2026
+    # Filtre 2025-2026 uniquement
     df_raw = df_raw_all[df_raw_all['DateAnalyse'].dt.year >= 2025].copy()
     
     for col in ['LineQty', 'LineTotal']:
@@ -106,21 +107,39 @@ if df_raw_all is not None:
     else:
         df_raw['CAISSE EQ'] = df_raw['LineQty']
 
-    # --- CALCULS YTD POUR ALIGNEMENT ---
+    # --- FILTRES SIDEBAR ---
+    st.sidebar.divider()
+    start_ytd = date(2026, 1, 1)
+    if "date_range" not in st.session_state: st.session_state["date_range"] = (start_ytd, date.today())
+    if st.sidebar.button("🔄 Reset YTD"): st.session_state["date_range"] = (start_ytd, date.today())
+    date_sel = st.sidebar.date_input("Période d'analyse détaillée", value=st.session_state["date_range"], key="date_range")
+
+    # Données filtrées par le sélecteur
+    df_filtered = df_raw.copy()
+    if isinstance(date_sel, tuple) and len(date_sel) == 2:
+        df_filtered = df_raw[(df_raw['DateAnalyse'].dt.date >= date_sel[0]) & (df_raw['DateAnalyse'].dt.date <= date_sel[1])]
+
+    # --- CALCULS YTD STRICTS (Pour balancement Excel/App) ---
     df_2026_full = df_raw[df_raw['Année'] == 2026]
     max_day_2026 = df_2026_full['Jour_Annee'].max() if not df_2026_full.empty else 366
     df_2025_ytd = df_raw[(df_raw['Année'] == 2025) & (df_raw['Jour_Annee'] <= max_day_2026)]
-    
-    # Données combinées pour les tableaux YOY (Excel et App)
     df_ytd_combined = pd.concat([df_2026_full, df_2025_ytd])
 
     # --- KPI ---
     st.title(f"📊 Dashboard {page}")
     k1, k2 = st.columns(2)
-    k1.metric("Volume 2026 YTD", f"{df_2026_full['CAISSE EQ'].sum():,.0f}", delta=f"{df_2026_full['CAISSE EQ'].sum() - df_2025_ytd['CAISSE EQ'].sum():,.0f}")
-    k2.metric("Ventes 2026 YTD", f"{df_2026_full['LineTotal'].sum():,.0f} $", delta=f"{df_2026_full['LineTotal'].sum() - df_2025_ytd['LineTotal'].sum():,.0f} $")
+    with k1:
+        st.subheader("📦 Volume (Eq. 12)")
+        v1, v2 = st.columns(2)
+        v1.metric("2026 YTD", f"{df_2026_full['CAISSE EQ'].sum():,.0f}")
+        v2.metric("2025 YTD", f"{df_2025_ytd['CAISSE EQ'].sum():,.0f}", delta=f"{df_2026_full['CAISSE EQ'].sum() - df_2025_ytd['CAISSE EQ'].sum():,.0f}")
+    with k2:
+        st.subheader("💰 Ventes ($)")
+        s1, s2 = st.columns(2)
+        s1.metric("2026 YTD", f"{df_2026_full['LineTotal'].sum():,.0f} $")
+        s2.metric("2025 YTD", f"{df_2025_ytd['LineTotal'].sum():,.0f} $", delta=f"{df_2026_full['LineTotal'].sum() - df_2025_ytd['LineTotal'].sum():,.0f} $")
 
-    # --- TENDANCES YOY (ALIGNÉES) ---
+    # --- TENDANCES MENSUELLES ---
     st.divider()
     pivot_vol_ytd = df_ytd_combined.pivot_table(index='Mois_Nom', columns='Année', values='CAISSE EQ', aggfunc='sum').fillna(0)
     pivot_val_ytd = df_ytd_combined.pivot_table(index='Mois_Nom', columns='Année', values='LineTotal', aggfunc='sum').fillna(0)
@@ -133,24 +152,29 @@ if df_raw_all is not None:
         st.plotly_chart(px.line(pivot_val_ytd.reset_index(), x='Mois_Nom', y=pivot_val_ytd.columns, markers=True), use_container_width=True)
         st.dataframe(pivot_val_ytd.style.format("{:,.2f} $"), use_container_width=True)
 
-    # --- BANNIÈRES & CLIENTS ---
+    # --- TOP BANNIÈRES ET CLIENTS ---
     st.divider()
     cl, cr = st.columns(2)
     with cl:
-        st.subheader("🏢 Top Bannières (2026)")
-        banner = df_2026_full.groupby('GroupName')['CAISSE EQ'].sum().sort_values(ascending=False).head(10)
-        st.plotly_chart(px.pie(banner.reset_index(), values='CAISSE EQ', names='GroupName', hole=0.3), use_container_width=True)
+        st.header("🏢 Top Bannières (Période choisie)")
+        banner_data = df_filtered.groupby('GroupName')['CAISSE EQ'].sum().reset_index().sort_values('CAISSE EQ', ascending=False)
+        st.plotly_chart(px.pie(banner_data.head(10), values='CAISSE EQ', names='GroupName', hole=0.4), use_container_width=True)
     with cr:
-        st.subheader("👥 Top 15 Clients (2026)")
-        st.dataframe(df_2026_full.groupby('CardName')['CAISSE EQ'].sum().sort_values(ascending=False).head(15), use_container_width=True)
+        st.header("👥 Top 15 Clients (Période choisie)")
+        client_data = df_filtered.groupby('CardName')['CAISSE EQ'].sum().reset_index().sort_values('CAISSE EQ', ascending=False).head(15)
+        st.dataframe(client_data.rename(columns={'CardName':'Client','CAISSE EQ':'Caisses'}), use_container_width=True, hide_index=True)
 
-    # --- SKU YOY ---
+    # --- COMPARISON SKU YOY & DÉTAIL ---
     st.divider()
-    st.header("📦 SKU Comparison (YTD)")
-    sku_yoy = pd.DataFrame({'2025 (YTD)': df_2025_ytd.groupby('ItemName')['CAISSE EQ'].sum(), 
-                            '2026 (YTD)': df_2026_full.groupby('ItemName')['CAISSE EQ'].sum()}).fillna(0)
+    st.header("📦 Performance par SKU (YTD)")
+    sku_2026 = df_2026_full.groupby('ItemName')['CAISSE EQ'].sum()
+    sku_2025 = df_2025_ytd.groupby('ItemName')['CAISSE EQ'].sum()
+    sku_yoy = pd.DataFrame({'2025 (YTD)': sku_2025, '2026 (YTD)': sku_2026}).fillna(0)
     sku_yoy['Variation'] = sku_yoy['2026 (YTD)'] - sku_yoy['2025 (YTD)']
     st.dataframe(sku_yoy.sort_values('2026 (YTD)', ascending=False).style.format("{:.0f}").bar(subset=['Variation'], align='mid', color=['#ff9999', '#99ff99']), use_container_width=True)
+
+    st.subheader("📋 Détail complet (Période choisie)")
+    st.dataframe(df_filtered.groupby('ItemName').agg({'LineQty':'sum', 'CAISSE EQ':'sum', 'LineTotal':'sum'}).rename(columns={'LineQty':'Qté Phys.', 'CAISSE EQ':'Eq. 12', 'LineTotal':'Total ($)'}), use_container_width=True)
 
     # --- EXPORT EXCEL ---
     max_d = df_raw['DateAnalyse'].max()
@@ -158,9 +182,8 @@ if df_raw_all is not None:
     pivot_sku_xls = df_2026_full.pivot_table(index='ItemName', columns='Mois_Nom', values='CAISSE EQ', aggfunc='sum').fillna(0)
     pivot_banner_xls = df_2026_full.groupby('GroupName')['CAISSE EQ'].sum().to_frame()
 
-    # On envoie les pivots YTD filtrés à l'Excel
     excel_file = generate_styled_excel(df_week, pivot_vol_ytd, pivot_val_ytd, pivot_sku_xls, pivot_banner_xls)
     st.sidebar.download_button("📥 Télécharger Rapport Excel PRO", data=excel_file, file_name=f"Rapport_{page}_{date.today()}.xlsx")
 
 else:
-    st.error("Données introuvables.")
+    st.error("Données introuvables. Vérifiez vos dossiers Drive.")
