@@ -53,30 +53,41 @@ def harmoniser_formats_alc(row):
             return pd.Series([qty * 2, code])
         return pd.Series([qty, code])
 
-# --- EXCEL PRO ---
+# --- EXCEL PRO (STYLE ÉPURÉ SANS BORDURES) ---
 def generate_styled_excel(df_week, pivot_vol, pivot_val, pivot_sku, pivot_banner):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         workbook = writer.book
-        fmt_header = workbook.add_format({'bold': True, 'bg_color': '#1F4E78', 'font_color': 'white', 'border': 1})
-        fmt_money = workbook.add_format({'num_format': '#,##0.00 $', 'border': 1})
-        fmt_qty = workbook.add_format({'num_format': '#,##0', 'border': 1})
+        # Formats sans bordures
+        fmt_header = workbook.add_format({'bold': True, 'bg_color': '#1F4E78', 'font_color': 'white', 'align': 'center'})
+        fmt_money = workbook.add_format({'num_format': '#,##0.00 $'})
+        fmt_qty = workbook.add_format({'num_format': '#,##0'})
+        fmt_total = workbook.add_format({'bold': True, 'bg_color': '#F2F2F2'})
         
-        def save_sheet(df, name, is_money=False):
+        def save_sheet(df, name, is_money=False, add_row_total=True):
             df_t = df.copy()
+            # Total par colonne (toujours présent)
             df_t.loc['TOTAL GLOBAL'] = df_t.sum(numeric_only=True)
-            if len(df_t.columns) > 1: df_t['TOTAL'] = df_t.sum(axis=1, numeric_only=True)
+            # Total par rangée (désactivé pour les deux premiers onglets)
+            if add_row_total and len(df_t.columns) > 1: 
+                df_t['TOTAL'] = df_t.sum(axis=1, numeric_only=True)
+            
             df_t.to_excel(writer, sheet_name=name)
             ws = writer.sheets[name]
             f = fmt_money if is_money else fmt_qty
-            for i, col in enumerate(df_t.columns): ws.set_column(i+1, i+1, 15, f)
-            ws.set_column(0, 0, 35)
+            
+            # Ajustement largeur et application du format (sans bordures)
+            for i, col in enumerate(df_t.columns): 
+                ws.set_column(i+1, i+1, 18, f)
+            ws.set_column(0, 0, 35) # Colonne noms
 
-        save_sheet(df_week, 'Dernière Semaine')
-        save_sheet(pivot_vol, 'Vol Mensuel YOY')
-        save_sheet(pivot_val, 'Dollars Mensuels YOY', True)
-        save_sheet(pivot_sku, 'SKU par Mois')
-        save_sheet(pivot_banner, 'Bannières')
+        # Application des règles spécifiques par onglet
+        save_sheet(df_week, 'Dernière Semaine', add_row_total=False) # Onglet 1
+        save_sheet(pivot_vol, 'Vol Mensuel YOY', add_row_total=False) # Onglet 2
+        save_sheet(pivot_val, 'Dollars Mensuels YOY', is_money=True, add_row_total=False)
+        save_sheet(pivot_sku, 'SKU par Mois', add_row_total=True)
+        save_sheet(pivot_banner, 'Bannières', add_row_total=True)
+        
     return output.getvalue()
 
 # --- MAIN APP ---
@@ -89,7 +100,10 @@ if df_raw_all is not None:
     df_raw_all['DocDate'] = pd.to_datetime(df_raw_all['DocDate'], errors='coerce')
     df_raw_all['DateLivraison'] = pd.to_datetime(df_raw_all['DateLivraison'], errors='coerce')
     df_raw_all['DateAnalyse'] = df_raw_all['DateLivraison'].fillna(df_raw_all['DocDate'])
-    df_raw = df_raw_all.dropna(subset=['DateAnalyse']).copy()
+    
+    # FILTRE STRICT : On retire 2024 ici
+    df_raw = df_raw_all[df_raw_all['DateAnalyse'].dt.year >= 2025].copy()
+    df_raw = df_raw.dropna(subset=['DateAnalyse'])
     
     for col in ['LineQty', 'LineTotal', 'Rabais']:
         df_raw[col] = pd.to_numeric(df_raw[col], errors='coerce').fillna(0)
@@ -110,17 +124,17 @@ if df_raw_all is not None:
     if st.sidebar.button("🔄 Reset YTD"): st.session_state["date_range"] = (start_ytd, date.today())
     date_sel = st.sidebar.date_input("Période d'analyse", value=st.session_state["date_range"], key="date_range")
 
-    # Filtrage des données
+    # Filtrage des données selon le sélecteur
     df_filtered = df_raw.copy()
     if isinstance(date_sel, tuple) and len(date_sel) == 2:
         df_filtered = df_raw[(df_raw['DateAnalyse'].dt.date >= date_sel[0]) & (df_raw['DateAnalyse'].dt.date <= date_sel[1])]
 
-    # --- KPI COMPARATIFS YTD ---
+    # --- KPI COMPARATIFS YTD (2025 vs 2026 uniquement) ---
     df_2026_full = df_raw[df_raw['Année'] == 2026]
     max_day_2026 = df_2026_full['Jour_Annee'].max() if not df_2026_full.empty else 366
     df_2025_ytd = df_raw[(df_raw['Année'] == 2025) & (df_raw['Jour_Annee'] <= max_day_2026)]
 
-    st.title(f"📊 Dashboard {page}")
+    st.title(f"📊 Dashboard {page} (2025-2026)")
     c1, c2 = st.columns(2)
     with c1:
         st.subheader("📦 Volume (Eq. 12)")
@@ -158,12 +172,6 @@ if df_raw_all is not None:
         st.header("👥 Top 15 Clients")
         client_data = df_filtered.groupby('CardName')['CAISSE EQ'].sum().reset_index().sort_values('CAISSE EQ', ascending=False).head(15)
         st.dataframe(client_data.rename(columns={'CardName':'Client','CAISSE EQ':'Caisses'}), use_container_width=True, hide_index=True)
-
-    # --- DÉTAIL PRODUITS ---
-    st.divider()
-    st.header("📦 Détail Produits (Période Sélectionnée)")
-    sku_data = df_filtered.groupby('ItemName').agg({'LineQty':'sum', 'CAISSE EQ':'sum', 'LineTotal':'sum'}).sort_values('CAISSE EQ', ascending=False)
-    st.dataframe(sku_data.rename(columns={'LineQty':'Qté Phys.', 'CAISSE EQ':'Eq. 12', 'LineTotal':'Total ($)'}), use_container_width=True)
 
     # --- EXPORT EXCEL ---
     max_d = df_raw['DateAnalyse'].max()
