@@ -4,9 +4,9 @@ import plotly.express as px
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import io
-from datetime import date
+from datetime import date, timedelta
 
-st.set_page_config(page_title="Dashboard Alchimiste & LOOP", layout="wide")
+st.set_page_config(page_title="Dashboard Alchimiste & LOOP - Master Intégral", layout="wide")
 
 # --- CONFIGURATION DRIVE ---
 ID_DOSSIER_ALCHIMISTE = "1eTeWop4EVTDB9GbAPPixJZDcVYeZnauD"
@@ -30,115 +30,181 @@ def load_data_from_drive(folder_id):
             if item['name'].lower().endswith('.xlsx'):
                 df_temp = pd.read_excel(io.BytesIO(content), engine='openpyxl')
             else:
-                # Utilisation de latin1 pour lire les accents comme dans "MÉTRO"
-                df_temp = pd.read_csv(io.BytesIO(content), sep=',', encoding='latin1', on_bad_lines='skip')
+                raw_str = content.decode('latin1')
+                try:
+                    df_temp = pd.read_csv(io.StringIO(raw_str), sep=',', quotechar='"', on_bad_lines='skip')
+                except:
+                    df_temp = pd.read_csv(io.StringIO(raw_str), sep=';', quotechar='"', on_bad_lines='skip')
             
+            # Nettoyage immédiat des colonnes
             df_temp.columns = df_temp.columns.str.strip()
+            for col in ['LineQty', 'LineTotal', 'Rabais']:
+                if col in df_temp.columns and df_temp[col].dtype == 'object':
+                    df_temp[col] = df_temp[col].str.replace(',', '.').str.replace(r'[^\d.-]', '', regex=True)
             df_list.append(df_temp)
-        except Exception:
-            continue
+        except Exception: continue
     return pd.concat(df_list, ignore_index=True) if df_list else None
 
 # --- LOGIQUE DE CONVERSION ---
-def harmoniser_vers_12(row, marque):
-    code = str(row.get('ItemCode', '')).strip().upper()
-    qty = pd.to_numeric(row.get('LineQty', 0), errors='coerce') or 0
-    annee = row.get('Année', 2026)
-    if marque == "Alchimiste":
-        if annee == 2025: return pd.Series([qty * 2, code])
-        else:
-            if code.endswith('SG4P'): return pd.Series([qty / 3, code])
-            return pd.Series([qty / 12, code])
-    else: return pd.Series([qty, code])
+def harmoniser_formats_alc(row):
+    code = str(row['ItemCode']).strip().upper()
+    qty = row['LineQty']
+    if row['Année'] == 2025:
+        return pd.Series([qty, code])
+    else:
+        if code.endswith('SG4P') or (not code.endswith('12')):
+            return pd.Series([qty * 2, code])
+        return pd.Series([qty, code])
+
+# --- EXCEL PRO ---
+def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_banner):
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        workbook = writer.book
+        fmt_money = workbook.add_format({'num_format': '#,##0.00 $'})
+        fmt_qty = workbook.add_format({'num_format': '#,##0'})
+        fmt_perc = workbook.add_format({'num_format': '0.0%'})
+        
+        def save_sheet(df, name, is_money=False, add_row_total=True):
+            df_t = df.copy()
+            if add_row_total:
+                df_t.loc['TOTAL GLOBAL'] = df_t.sum(numeric_only=True)
+            df_t.to_excel(writer, sheet_name=name)
+            ws = writer.sheets[name]
+            for i, col in enumerate(df_t.columns):
+                f = fmt_perc if "Variation %" in str(col) else (fmt_money if is_money else fmt_qty)
+                ws.set_column(i+1, i+1, 20, f)
+            ws.set_column(0, 0, 40)
+
+        save_sheet(df_week_comp, 'Comparaison Semaine', add_row_total=True)
+        save_sheet(pivot_vol, 'Vol Mensuel YOY', add_row_total=False)
+        save_sheet(pivot_val, 'Dollars Mensuels YOY', is_money=True, add_row_total=False)
+        save_sheet(pivot_sku, 'Détail SKU 2026', add_row_total=True)
+        save_sheet(pivot_banner, 'Bannières 2026', add_row_total=True)
+    return output.getvalue()
 
 # --- MAIN APP ---
-st.sidebar.title("🍺 Contrôles Dashboard")
+st.sidebar.title("🍺 Navigation Master")
 page = st.sidebar.radio("Marque :", ["Alchimiste", "LOOP"])
 df_raw_all = load_data_from_drive(ID_DOSSIER_ALCHIMISTE if page == "Alchimiste" else ID_DOSSIER_LOOP)
 
 if df_raw_all is not None:
-    # Nettoyage numérique
-    for col in ['LineQty', 'LineTotal']:
-        if col in df_raw_all.columns:
-            df_raw_all[col] = pd.to_numeric(df_raw_all[col].astype(str).str.replace(',', '.').str.replace(r'[^\d.-]', '', regex=True), errors='coerce').fillna(0)
-
-    # Dates
+    # --- PRÉ-TRAITEMENT DES DATES ---
     df_raw_all['DocDate'] = pd.to_datetime(df_raw_all['DocDate'], errors='coerce')
     df_raw_all['DateLivraison'] = pd.to_datetime(df_raw_all['DateLivraison'], errors='coerce')
     df_raw_all['DateAnalyse'] = df_raw_all['DateLivraison'].fillna(df_raw_all['DocDate'])
-    df_raw_all['Année'] = df_raw_all['DateAnalyse'].dt.year
-    df_raw_all['Mois_Nom'] = df_raw_all['DateAnalyse'].dt.strftime('%m - %B')
-    df_raw_all['Jour_Annee'] = df_raw_all['DateAnalyse'].dt.dayofyear
+    
+    df_raw = df_raw_all[df_raw_all['DateAnalyse'].dt.year >= 2025].copy()
+    for col in ['LineQty', 'LineTotal']:
+        df_raw[col] = pd.to_numeric(df_raw[col], errors='coerce').fillna(0)
+    
+    df_raw['Année'] = df_raw['DateAnalyse'].dt.year
+    df_raw['Mois_Nom'] = df_raw['DateAnalyse'].dt.strftime('%m - %B')
+    df_raw['Jour_Annee'] = df_raw['DateAnalyse'].dt.dayofyear
+    df_raw['Semaine'] = df_raw['DateAnalyse'].dt.isocalendar().week
 
-    # Conversion Caisses
-    df_raw_all[['CAISSE_12', 'SKU_BASE']] = df_raw_all.apply(harmoniser_vers_12, axis=1, args=(page,))
-
-    # Sélecteur de date
-    st.sidebar.divider()
-    ytd_start = date(2026, 1, 1)
-    if "date_range" not in st.session_state: st.session_state["date_range"] = (ytd_start, date.today())
-    date_sel = st.sidebar.date_input("Période d'analyse", value=st.session_state["date_range"], key="date_range")
-
-    # Filtrage
-    df_filtered = df_raw_all.copy()
-    if isinstance(date_sel, tuple) and len(date_sel) == 2:
-        df_filtered = df_raw_all[(df_raw_all['DateAnalyse'].dt.date >= date_sel[0]) & (df_raw_all['DateAnalyse'].dt.date <= date_sel[1])]
-
-    # --- SÉPARATION METRO / SUPER C (LOGIQUE CORRIGÉE) ---
-    if 'GroupName' in df_filtered.columns and 'CardName' in df_filtered.columns:
-        df_filtered['Banniere_Clean'] = df_filtered['GroupName'].astype(str)
-        # On détecte METRO (avec ou sans accent)
-        mask_metro = df_filtered['GroupName'].str.contains("METRO|MÉTRO", case=False, na=False)
-        # On détecte SUPER C dans le nom du client
-        mask_superc = df_filtered['CardName'].str.contains("SUPER C", case=False, na=False)
+    # --- LOGIQUE DE SUBDIVISION MÉTRO / SUPER C (Dès le départ) ---
+    if 'GroupName' in df_raw.columns and 'CardName' in df_raw.columns:
+        # On crée une nouvelle colonne pour ne pas écraser l'originale
+        df_raw['Banniere_Clean'] = df_raw['GroupName'].astype(str)
         
-        df_filtered.loc[mask_metro, 'Banniere_Clean'] = "METRO"
-        df_filtered.loc[mask_metro & mask_superc, 'Banniere_Clean'] = "SUPER C"
+        # Masques de détection
+        mask_metro = df_raw['GroupName'].str.contains("METRO|MÉTRO", case=False, na=False)
+        mask_superc = df_raw['CardName'].str.contains("SUPER C", case=False, na=False)
+        
+        # On applique le nom simplifié
+        df_raw.loc[mask_metro, 'Banniere_Clean'] = "METRO"
+        df_raw.loc[mask_metro & mask_superc, 'Banniere_Clean'] = "SUPER C"
+    else:
+        df_raw['Banniere_Clean'] = df_raw['GroupName'] if 'GroupName' in df_raw.columns else "Inconnu"
 
-    # Calculs YTD - VARIABLES RENOMMÉES SANS SYMBOLE SPECIAL
-    df_2026 = df_raw_all[df_raw_all['Année'] == 2026]
-    max_day_2026 = df_2026['Jour_Annee'].max() if not df_2026.empty else 366
-    df_2025_ytd = df_raw_all[(df_raw_all['Année'] == 2025) & (df_raw_all['Jour_Annee'] <= max_day_2026)]
+    if page == "Alchimiste":
+        df_raw[['CAISSE EQ', 'SKU_BASE']] = df_raw.apply(harmoniser_formats_alc, axis=1)
+    else:
+        df_raw['CAISSE EQ'] = df_raw['LineQty']
 
-    # Affichage KPIs
+    # --- FILTRES SIDEBAR ---
+    st.sidebar.divider()
+    start_ytd = date(2026, 1, 1)
+    if "date_range" not in st.session_state: st.session_state["date_range"] = (start_ytd, date.today())
+    if st.sidebar.button("🔄 Reset YTD"): st.session_state["date_range"] = (start_ytd, date.today())
+    date_sel = st.sidebar.date_input("Analyse détaillée (Graphs)", value=st.session_state["date_range"], key="date_range")
+
+    df_filtered = df_raw.copy()
+    if isinstance(date_sel, tuple) and len(date_sel) == 2:
+        df_filtered = df_raw[(df_raw['DateAnalyse'].dt.date >= date_sel[0]) & (df_raw['DateAnalyse'].dt.date <= date_sel[1])]
+
+    # --- KPI COMPARATIFS YTD ---
+    df_2026_full = df_raw[df_raw['Année'] == 2026]
+    max_day_2026 = df_2026_full['Jour_Annee'].max() if not df_2026_full.empty else 366
+    df_2025_ytd = df_raw[(df_raw['Année'] == 2025) & (df_raw['Jour_Annee'] <= max_day_2026)]
+
     st.title(f"📊 Dashboard {page}")
-    
-    c1, c2, c3, c4 = st.columns(4)
-    vol_26 = df_2026['CAISSE_12'].sum()
-    vol_25_ytd = df_2025_ytd['CAISSE_12'].sum()
-    ventes_26 = df_2026['LineTotal'].sum()
-    ventes_25_ytd = df_2025_ytd['LineTotal'].sum()
-    
-    c1.metric("Volume 2026 (12)", f"{vol_26:,.0f}")
-    c2.metric("Ventes 2026 ($)", f"{ventes_26:,.0f} $")
-    c3.metric("YOY Vol. (vs 2025)", f"{vol_25_ytd:,.0f}", delta=f"{vol_26 - vol_25_ytd:,.0f}")
-    c4.metric("YOY Ventes (vs 2025)", f"{ventes_25_ytd:,.0f} $", delta=f"{ventes_26 - ventes_25_ytd:,.0f} $")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.subheader("📦 Volume (Eq. 12)")
+        v1, v2 = st.columns(2)
+        v1.metric("2026 YTD", f"{df_2026_full['CAISSE EQ'].sum():,.0f}")
+        v2.metric("2025 YTD", f"{df_2025_ytd['CAISSE EQ'].sum():,.0f}", delta=f"{df_2026_full['CAISSE EQ'].sum() - df_2025_ytd['CAISSE EQ'].sum():,.0f}")
+    with c2:
+        st.subheader("💰 Ventes ($)")
+        s1, s2 = st.columns(2)
+        s1.metric("2026 YTD", f"{df_2026_full['LineTotal'].sum():,.0f} $")
+        s2.metric("2025 YTD", f"{df_2025_ytd['LineTotal'].sum():,.0f} $", delta=f"{df_2026_full['LineTotal'].sum() - df_2025_ytd['LineTotal'].sum():,.0f} $")
 
+    # --- VUE MENSUELLE ---
     st.divider()
-    t1, t2 = st.tabs(["📉 Performance", "🏢 Bannières"])
+    pivot_vol = df_raw.pivot_table(index='Mois_Nom', columns='Année', values='CAISSE EQ', aggfunc='sum').fillna(0)
+    pivot_val = df_raw.pivot_table(index='Mois_Nom', columns='Année', values='LineTotal', aggfunc='sum').fillna(0)
     
-    with t1:
-        df_viz = pd.concat([df_2026, df_2025_ytd])
-        p1 = df_viz.pivot_table(index='Mois_Nom', columns='Année', values='CAISSE_12', aggfunc='sum').fillna(0)
-        st.plotly_chart(px.line(p1.reset_index(), x='Mois_Nom', y=p1.columns, markers=True, title="Volume Mensuel"), use_container_width=True)
+    tab_vol, tab_val = st.tabs(["📉 Volume Mensuel", "💵 Argent Mensuel"])
+    with tab_vol:
+        st.plotly_chart(px.line(pivot_vol.reset_index(), x='Mois_Nom', y=pivot_vol.columns, markers=True), use_container_width=True)
+        st.dataframe(pivot_vol.style.format("{:.0f}"), use_container_width=True)
+    with tab_val:
+        st.plotly_chart(px.line(pivot_val.reset_index(), x='Mois_Nom', y=pivot_val.columns, markers=True), use_container_width=True)
+        st.dataframe(pivot_val.style.format("{:,.2f} $"), use_container_width=True)
 
-    with t2:
-        st.header("🏢 Analyse par Enseigne")
-        b_col = 'Banniere_Clean' if 'Banniere_Clean' in df_filtered.columns else 'GroupName'
-        banner_data = df_filtered.groupby(b_col)['CAISSE_12'].sum().reset_index().sort_values('CAISSE_12', ascending=False)
-        st.plotly_chart(px.pie(banner_data.head(10), values='CAISSE_12', names=b_col, hole=0.4), use_container_width=True)
-        st.dataframe(banner_data, hide_index=True)
+    # --- LOGIQUE EXPORT EXCEL (AVEC WoW et Bannière Clean) ---
+    current_week = df_2026_full['Semaine'].max() if not df_2026_full.empty else 1
+    df_w_2026 = df_2026_full[df_2026_full['Semaine'] == current_week]
+    df_w_2025 = df_raw[(df_raw['Année'] == 2025) & (df_raw['Semaine'] == current_week)]
+    
+    w26 = df_w_2026.groupby('ItemName')['CAISSE EQ'].sum()
+    w25 = df_w_2025.groupby('ItemName')['CAISSE EQ'].sum()
+    
+    df_week_comp = pd.DataFrame({f'Sem {current_week} (2025)': w25, f'Sem {current_week} (2026)': w26}).fillna(0)
+    df_week_comp['Var. Absolue'] = df_week_comp.iloc[:, 1] - df_week_comp.iloc[:, 0]
+    df_week_comp['Variation %'] = (df_week_comp['Var. Absolue'] / df_week_comp.iloc[:, 0].replace(0, 1))
 
-    st.header("📦 Performance par SKU")
-    sku_data = df_filtered.groupby('ItemName').agg({'CAISSE_12':'sum', 'LineTotal':'sum'}).sort_values('CAISSE_12', ascending=False)
-    st.dataframe(sku_data.style.format({'CAISSE_12': '{:,.1f}', 'LineTotal': '{:,.2f} $'}), use_container_width=True)
+    pivot_sku_xls = df_2026_full.pivot_table(index='ItemName', columns='Mois_Nom', values='CAISSE EQ', aggfunc='sum').fillna(0)
+    # On utilise Banniere_Clean ici aussi pour l'Excel
+    pivot_banner_xls = df_2026_full.groupby('Banniere_Clean')['CAISSE EQ'].sum().to_frame()
 
-    # Export
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        df_filtered.pivot_table(index=b_col, columns='Année', values='LineTotal', aggfunc='sum').to_excel(writer, sheet_name='Finance')
-        sku_data.to_excel(writer, sheet_name='SKU')
-    st.sidebar.download_button("📥 Télécharger Rapport Excel", data=output.getvalue(), file_name=f"Rapport_{page}.xlsx")
+    excel_file = generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku_xls, pivot_banner_xls)
+    st.sidebar.download_button(f"📥 Télécharger Rapport {page} (Excel)", data=excel_file, file_name=f"Rapport_{page}_{date.today()}.xlsx")
+
+    # --- TOP BANNIÈRES ET CLIENTS ---
+    st.divider()
+    col_left, col_right = st.columns(2)
+    with col_left:
+        st.header("🏢 Top Bannières")
+        # CHANGEMENT ICI : On utilise 'Banniere_Clean' au lieu de 'GroupName'
+        banner_data = df_filtered.groupby('Banniere_Clean')['CAISSE EQ'].sum().reset_index().sort_values('CAISSE EQ', ascending=False)
+        st.plotly_chart(px.pie(banner_data.head(10), values='CAISSE EQ', names='Banniere_Clean', hole=0.4), use_container_width=True)
+    with col_right:
+        st.header("👥 Top 15 Clients")
+        client_data = df_filtered.groupby('CardName')['CAISSE EQ'].sum().reset_index().sort_values('CAISSE EQ', ascending=False).head(15)
+        st.dataframe(client_data.rename(columns={'CardName':'Client','CAISSE EQ':'Caisses'}), use_container_width=True, hide_index=True)
+
+    # --- COMPARISON SKU YOY (BAS DE PAGE) ---
+    st.divider()
+    st.header("📦 Comparaison par SKU (YTD)")
+    sku_2026_ytd = df_2026_full.groupby('ItemName')['CAISSE EQ'].sum()
+    sku_2025_ytd_val = df_2025_ytd.groupby('ItemName')['CAISSE EQ'].sum()
+    sku_yoy = pd.DataFrame({'2025 (YTD)': sku_2025_ytd_val, '2026 (YTD)': sku_2026_ytd}).fillna(0)
+    sku_yoy['Variation'] = sku_yoy['2026 (YTD)'] - sku_yoy['2025 (YTD)']
+    st.dataframe(sku_yoy.sort_values('2026 (YTD)', ascending=False).style.format("{:.0f}").bar(subset=['Variation'], align='mid', color=['#ff9999', '#99ff99']), use_container_width=True)
 
 else:
-    st.error("Données Drive introuvables.")
+    st.error("Données introuvables. Vérifiez vos dossiers Drive.")
