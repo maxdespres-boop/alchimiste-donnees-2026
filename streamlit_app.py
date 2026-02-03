@@ -52,24 +52,20 @@ def harmoniser_vers_12(row, marque):
             return pd.Series([qty / 12, code])
     else: return pd.Series([qty, code])
 
-# --- LOGIQUE DE SUBDIVISION DES BANNIÈRES (CORRIGÉE) ---
-def subdiviser_banniere(row):
-    # On récupère les valeurs et on met tout en majuscules
-    groupe = str(row.get('GroupName', '')).upper()
-    client = str(row.get('CardName', '')).upper()
-    
-    # On teste les deux orthographes possibles pour être blindé
-    est_un_metro = "MÉTRO" in groupe or "METRO" in groupe
-    
-    if est_un_metro:
-        # On cherche SUPER C dans le nom du client
-        if "SUPER C" in client or "SUPERC" in client:
-            return "SUPER C"
-        else:
+# --- LOGIQUE DE SUBDIVISION (VÉRITABLE DÉTECTION) ---
+def appliquer_subdivision(df):
+    def detecter(row):
+        grp = str(row.get('GroupName', '')).upper()
+        name = str(row.get('CardName', '')).upper()
+        # Si le groupe contient METRO (avec ou sans accent)
+        if "METRO" in grp or "MÉTRO" in grp:
+            if "SUPER C" in name or "SUPERC" in name:
+                return "SUPER C"
             return "METRO"
+        return grp
     
-    # Si ce n'est pas un Metro, on retourne le groupe original nettoyé
-    return groupe.strip()
+    df['Banniere_Clean'] = df.apply(detecter, axis=1)
+    return df
 
 # --- MAIN APP ---
 st.sidebar.title("🍺 Contrôles Dashboard")
@@ -89,10 +85,8 @@ if df_raw_all is not None:
     for col in ['LineQty', 'LineTotal']:
         df_raw[col] = pd.to_numeric(df_raw[col], errors='coerce').fillna(0)
 
+    # Conversion des quantités
     df_raw[['CAISSE_12', 'SKU_BASE']] = df_raw.apply(harmoniser_vers_12, axis=1, args=(page,))
-    
-    # Application de la nouvelle subdivision
-    df_raw['Banniere_Clean'] = df_raw.apply(subdiviser_banniere, axis=1)
 
     # --- SÉLECTEUR DE DATE & RESET ---
     st.sidebar.divider()
@@ -103,14 +97,18 @@ if df_raw_all is not None:
         st.rerun()
     date_sel = st.sidebar.date_input("Période d'analyse", value=st.session_state["date_range"], key="date_range")
 
-    # --- CALCULS YTD ---
-    df_2026 = df_raw[df_raw['Année'] == 2026]
-    max_day_2026 = df_2026['Jour_Annee'].max() if not df_2026.empty else 366
-    df_2025_ytd = df_raw[(df_raw['Année'] == 2025) & (df_raw['Jour_Annee'] <= max_day_2026)]
-    
+    # --- FILTRAGE ET SUBDIVISION (ICI QUE ÇA SE JOUE) ---
     df_filtered = df_raw.copy()
     if isinstance(date_sel, tuple) and len(date_sel) == 2:
         df_filtered = df_raw[(df_raw['DateAnalyse'].dt.date >= date_sel[0]) & (df_raw['DateAnalyse'].dt.date <= date_sel[1])]
+    
+    # On applique la subdivision sur le dataframe filtré juste avant l'affichage
+    df_filtered = appliquer_subdivision(df_filtered)
+
+    # Données pour les KPI (YTD)
+    df_2026 = df_raw[df_raw['Année'] == 2026]
+    max_day_2026 = df_2026['Jour_Annee'].max() if not df_2026.empty else 366
+    df_2025_ytd = df_raw[(df_raw['Année'] == 2025) & (df_raw['Jour_Annee'] <= max_day_2026)]
 
     # --- AFFICHAGE KPIs ---
     st.title(f"📊 Dashboard {page}")
@@ -133,7 +131,7 @@ if df_raw_all is not None:
         st.plotly_chart(px.line(p1.reset_index(), x='Mois_Nom', y=p1.columns, markers=True, title="Volume Mensuel YTD (Base 12)"), use_container_width=True)
 
     with t2:
-        st.header("🏢 Répartition par Bannière")
+        st.header("🏢 Répartition par Bannière (Nettoyée)")
         banner_data = df_filtered.groupby('Banniere_Clean')['CAISSE_12'].sum().reset_index().sort_values('CAISSE_12', ascending=False)
         st.plotly_chart(px.pie(banner_data.head(15), values='CAISSE_12', names='Banniere_Clean', hole=0.4), use_container_width=True)
         st.dataframe(banner_data.rename(columns={'Banniere_Clean':'Bannière', 'CAISSE_12':'Caisses (12)'}), hide_index=True, use_container_width=True)
