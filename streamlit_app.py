@@ -35,9 +35,6 @@ def load_data_from_drive(folder_id):
                     df_temp = pd.read_csv(io.StringIO(raw_str), sep=',', quotechar='"', on_bad_lines='skip')
                 except:
                     df_temp = pd.read_csv(io.StringIO(raw_str), sep=';', quotechar='"', on_bad_lines='skip')
-            
-            # Nettoyage immédiat des colonnes
-            df_temp.columns = df_temp.columns.str.strip()
             for col in ['LineQty', 'LineTotal', 'Rabais']:
                 if col in df_temp.columns and df_temp[col].dtype == 'object':
                     df_temp[col] = df_temp[col].str.replace(',', '.').str.replace(r'[^\d.-]', '', regex=True)
@@ -103,27 +100,12 @@ if df_raw_all is not None:
     df_raw['Jour_Annee'] = df_raw['DateAnalyse'].dt.dayofyear
     df_raw['Semaine'] = df_raw['DateAnalyse'].dt.isocalendar().week
 
-    # --- LOGIQUE DE SUBDIVISION MÉTRO / SUPER C (Dès le départ) ---
-    if 'GroupName' in df_raw.columns and 'CardName' in df_raw.columns:
-        # On crée une nouvelle colonne pour ne pas écraser l'originale
-        df_raw['Banniere_Clean'] = df_raw['GroupName'].astype(str)
-        
-        # Masques de détection
-        mask_metro = df_raw['GroupName'].str.contains("METRO|MÉTRO", case=False, na=False)
-        mask_superc = df_raw['CardName'].str.contains("SUPER C", case=False, na=False)
-        
-        # On applique le nom simplifié
-        df_raw.loc[mask_metro, 'Banniere_Clean'] = "METRO"
-        df_raw.loc[mask_metro & mask_superc, 'Banniere_Clean'] = "SUPER C"
-    else:
-        df_raw['Banniere_Clean'] = df_raw['GroupName'] if 'GroupName' in df_raw.columns else "Inconnu"
-
     if page == "Alchimiste":
         df_raw[['CAISSE EQ', 'SKU_BASE']] = df_raw.apply(harmoniser_formats_alc, axis=1)
     else:
         df_raw['CAISSE EQ'] = df_raw['LineQty']
 
-    # --- FILTRES SIDEBAR ---
+    # --- FILTRES SIDEBAR (RÉINTÉGRÉS) ---
     st.sidebar.divider()
     start_ytd = date(2026, 1, 1)
     if "date_range" not in st.session_state: st.session_state["date_range"] = (start_ytd, date.today())
@@ -165,7 +147,7 @@ if df_raw_all is not None:
         st.plotly_chart(px.line(pivot_val.reset_index(), x='Mois_Nom', y=pivot_val.columns, markers=True), use_container_width=True)
         st.dataframe(pivot_val.style.format("{:,.2f} $"), use_container_width=True)
 
-    # --- LOGIQUE EXPORT EXCEL (AVEC WoW et Bannière Clean) ---
+    # --- LOGIQUE EXPORT EXCEL (AVEC WoW) ---
     current_week = df_2026_full['Semaine'].max() if not df_2026_full.empty else 1
     df_w_2026 = df_2026_full[df_2026_full['Semaine'] == current_week]
     df_w_2025 = df_raw[(df_raw['Année'] == 2025) & (df_raw['Semaine'] == current_week)]
@@ -178,8 +160,7 @@ if df_raw_all is not None:
     df_week_comp['Variation %'] = (df_week_comp['Var. Absolue'] / df_week_comp.iloc[:, 0].replace(0, 1))
 
     pivot_sku_xls = df_2026_full.pivot_table(index='ItemName', columns='Mois_Nom', values='CAISSE EQ', aggfunc='sum').fillna(0)
-    # On utilise Banniere_Clean ici aussi pour l'Excel
-    pivot_banner_xls = df_2026_full.groupby('Banniere_Clean')['CAISSE EQ'].sum().to_frame()
+    pivot_banner_xls = df_2026_full.groupby('GroupName')['CAISSE EQ'].sum().to_frame()
 
     excel_file = generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku_xls, pivot_banner_xls)
     st.sidebar.download_button(f"📥 Télécharger Rapport {page} (Excel)", data=excel_file, file_name=f"Rapport_{page}_{date.today()}.xlsx")
@@ -189,9 +170,9 @@ if df_raw_all is not None:
     col_left, col_right = st.columns(2)
     with col_left:
         st.header("🏢 Top Bannières")
-        # CHANGEMENT ICI : On utilise 'Banniere_Clean' au lieu de 'GroupName'
-        banner_data = df_filtered.groupby('Banniere_Clean')['CAISSE EQ'].sum().reset_index().sort_values('CAISSE EQ', ascending=False)
-        st.plotly_chart(px.pie(banner_data.head(10), values='CAISSE EQ', names='Banniere_Clean', hole=0.4), use_container_width=True)
+        if 'GroupName' in df_filtered.columns:
+            banner_data = df_filtered.groupby('GroupName')['CAISSE EQ'].sum().reset_index().sort_values('CAISSE EQ', ascending=False)
+            st.plotly_chart(px.pie(banner_data.head(10), values='CAISSE EQ', names='GroupName', hole=0.4), use_container_width=True)
     with col_right:
         st.header("👥 Top 15 Clients")
         client_data = df_filtered.groupby('CardName')['CAISSE EQ'].sum().reset_index().sort_values('CAISSE EQ', ascending=False).head(15)
