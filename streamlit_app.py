@@ -171,8 +171,13 @@ if df_raw_all is not None:
     with col_left:
         st.header("🏢 Top Bannières")
         if 'GroupName' in df_filtered.columns:
-            banner_data = df_filtered.groupby('GroupName')['CAISSE EQ'].sum().reset_index().sort_values('CAISSE EQ', ascending=False)
-            st.plotly_chart(px.pie(banner_data.head(10), values='CAISSE EQ', names='GroupName', hole=0.4), use_container_width=True)
+            # Créer une colonne ajustée qui sépare les SUPER C
+            df_filtered['GroupName_Adjusted'] = df_filtered.apply(
+                lambda row: 'SUPER C' if 'SUPER C' in str(row['CardName']).upper() else row['GroupName'], 
+                axis=1
+            )
+            banner_data = df_filtered.groupby('GroupName_Adjusted')['CAISSE EQ'].sum().reset_index().sort_values('CAISSE EQ', ascending=False)
+            st.plotly_chart(px.pie(banner_data.head(10), values='CAISSE EQ', names='GroupName_Adjusted', hole=0.4), use_container_width=True)
     with col_right:
         st.header("👥 Top 15 Clients")
         client_data = df_filtered.groupby('CardName')['CAISSE EQ'].sum().reset_index().sort_values('CAISSE EQ', ascending=False).head(15)
