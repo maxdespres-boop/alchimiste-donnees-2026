@@ -54,22 +54,20 @@ def harmoniser_vers_12(row, marque):
 
 # --- LOGIQUE DE SUBDIVISION DES BANNIÈRES (CORRIGÉE) ---
 def subdiviser_banniere(row):
-    groupe = str(row['GroupName']).strip().upper()
-    client = str(row['CardName']).strip().upper()
+    # On récupère les valeurs et on nettoie les espaces blancs au début/fin
+    groupe_raw = str(row['GroupName']).strip().upper()
+    client_raw = str(row['CardName']).strip().upper()
     
-    # Vérification pour Metro / Super C
-    if "MÉTRO" in groupe or "METRO" in groupe:
-        if "SUPER C" in client:
+    # 1. Vérifier si on est dans le groupe Metro (avec ou sans accent)
+    is_metro_group = "METRO" in groupe_raw or "MÉTRO" in groupe_raw
+    
+    if is_metro_group:
+        # 2. Chercher "SUPER C" n'importe où dans le nom du client
+        # On utilise une recherche de sous-chaîne simple mais efficace
+        if "SUPER C" in client_raw or "SUPERC" in client_raw:
             return "SUPER C"
-        return "METRO"
-    
-    # Sécurité pour IGA/Sobeys (optionnel mais utile)
-    if "SOBEYS" in groupe:
-        if "IGA" in client:
-            return "IGA"
-        return "SOBEYS / AUTRES"
-        
-    return groupe
+        else:
+            return "METRO"
 
 # --- MAIN APP ---
 st.sidebar.title("🍺 Contrôles Dashboard")
