@@ -30,7 +30,7 @@ def load_data_from_drive(folder_id):
             if item['name'].lower().endswith('.xlsx'):
                 df_temp = pd.read_excel(io.BytesIO(content), engine='openpyxl')
             else:
-                # Utilisation de latin1 pour bien lire "MÉTRO FRANCHISÉ -CO"
+                # Utilisation de latin1 pour lire les accents comme dans "MÉTRO"
                 df_temp = pd.read_csv(io.BytesIO(content), sep=',', encoding='latin1', on_bad_lines='skip')
             
             df_temp.columns = df_temp.columns.str.strip()
@@ -57,12 +57,12 @@ page = st.sidebar.radio("Marque :", ["Alchimiste", "LOOP"])
 df_raw_all = load_data_from_drive(ID_DOSSIER_ALCHIMISTE if page == "Alchimiste" else ID_DOSSIER_LOOP)
 
 if df_raw_all is not None:
-    # Nettoyage colonnes numériques
+    # Nettoyage numérique
     for col in ['LineQty', 'LineTotal']:
         if col in df_raw_all.columns:
             df_raw_all[col] = pd.to_numeric(df_raw_all[col].astype(str).str.replace(',', '.').str.replace(r'[^\d.-]', '', regex=True), errors='coerce').fillna(0)
 
-    # Dates et Années
+    # Dates
     df_raw_all['DocDate'] = pd.to_datetime(df_raw_all['DocDate'], errors='coerce')
     df_raw_all['DateLivraison'] = pd.to_datetime(df_raw_all['DateLivraison'], errors='coerce')
     df_raw_all['DateAnalyse'] = df_raw_all['DateLivraison'].fillna(df_raw_all['DocDate'])
@@ -84,31 +84,35 @@ if df_raw_all is not None:
     if isinstance(date_sel, tuple) and len(date_sel) == 2:
         df_filtered = df_raw_all[(df_raw_all['DateAnalyse'].dt.date >= date_sel[0]) & (df_raw_all['DateAnalyse'].dt.date <= date_sel[1])]
 
-    # --- LOGIQUE BULLDOZER (SÉPARATION METRO / SUPER C) ---
+    # --- SÉPARATION METRO / SUPER C (LOGIQUE CORRIGÉE) ---
     if 'GroupName' in df_filtered.columns and 'CardName' in df_filtered.columns:
         df_filtered['Banniere_Clean'] = df_filtered['GroupName'].astype(str)
+        # On détecte METRO (avec ou sans accent)
         mask_metro = df_filtered['GroupName'].str.contains("METRO|MÉTRO", case=False, na=False)
+        # On détecte SUPER C dans le nom du client
         mask_superc = df_filtered['CardName'].str.contains("SUPER C", case=False, na=False)
         
         df_filtered.loc[mask_metro, 'Banniere_Clean'] = "METRO"
         df_filtered.loc[mask_metro & mask_superc, 'Banniere_Clean'] = "SUPER C"
 
-    # Calculs YTD pour KPIs
+    # Calculs YTD - VARIABLES RENOMMÉES SANS SYMBOLE SPECIAL
     df_2026 = df_raw_all[df_raw_all['Année'] == 2026]
     max_day_2026 = df_2026['Jour_Annee'].max() if not df_2026.empty else 366
     df_2025_ytd = df_raw_all[(df_raw_all['Année'] == 2025) & (df_raw_all['Jour_Annee'] <= max_day_2026)]
 
-    # Affichage KPIs (SANS SYMBOLE $ DANS LES VARIABLES)
+    # Affichage KPIs
     st.title(f"📊 Dashboard {page}")
     
     c1, c2, c3, c4 = st.columns(4)
-    vol_2026, vol_2025 = df_2026['CAISSE_12'].sum(), df_2025_ytd['CAISSE_12'].sum()
-    ventes_2026, ventes_2025 = df_2026['LineTotal'].sum(), df_2025_ytd['LineTotal'].sum()
+    vol_26 = df_2026['CAISSE_12'].sum()
+    vol_25_ytd = df_2025_ytd['CAISSE_12'].sum()
+    ventes_26 = df_2026['LineTotal'].sum()
+    ventes_25_ytd = df_2025_ytd['LineTotal'].sum()
     
-    c1.metric("Volume 2026 (12)", f"{vol_2026:,.0f}")
-    c2.metric("Ventes 2026 ($)", f"{ventes_2026:,.0f} $")
-    c3.metric("YOY Vol. (vs 2025)", f"{vol_2025:,.0f}", delta=f"{vol_2026-vol_2025:,.0f}")
-    c4.metric("YOY Ventes (vs 2025)", f"{ventes_2025:,.0f} $", delta=f"{ventes_2026-ventes_2025:,.0f} $")
+    c1.metric("Volume 2026 (12)", f"{vol_26:,.0f}")
+    c2.metric("Ventes 2026 ($)", f"{ventes_26:,.0f} $")
+    c3.metric("YOY Vol. (vs 2025)", f"{vol_25_ytd:,.0f}", delta=f"{vol_26 - vol_25_ytd:,.0f}")
+    c4.metric("YOY Ventes (vs 2025)", f"{ventes_25_ytd:,.0f} $", delta=f"{ventes_26 - ventes_25_ytd:,.0f} $")
 
     st.divider()
     t1, t2 = st.tabs(["📉 Performance", "🏢 Bannières"])
@@ -129,7 +133,7 @@ if df_raw_all is not None:
     sku_data = df_filtered.groupby('ItemName').agg({'CAISSE_12':'sum', 'LineTotal':'sum'}).sort_values('CAISSE_12', ascending=False)
     st.dataframe(sku_data.style.format({'CAISSE_12': '{:,.1f}', 'LineTotal': '{:,.2f} $'}), use_container_width=True)
 
-    # Export Excel
+    # Export
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         df_filtered.pivot_table(index=b_col, columns='Année', values='LineTotal', aggfunc='sum').to_excel(writer, sheet_name='Finance')
