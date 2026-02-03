@@ -52,16 +52,23 @@ def harmoniser_vers_12(row, marque):
             return pd.Series([qty / 12, code])
     else: return pd.Series([qty, code])
 
-# --- LOGIQUE DE SUBDIVISION DES BANNIÈRES ---
+# --- LOGIQUE DE SUBDIVISION DES BANNIÈRES (CORRIGÉE) ---
 def subdiviser_banniere(row):
-    groupe = str(row['GroupName']).strip()
-    client = str(row['CardName']).upper()
+    groupe = str(row['GroupName']).strip().upper()
+    client = str(row['CardName']).strip().upper()
     
-    if "MÉTRO FRANCHISÉ-CO" in groupe or "METRO FRANCHISE-CO" in groupe:
+    # Vérification pour Metro / Super C
+    if "MÉTRO" in groupe or "METRO" in groupe:
         if "SUPER C" in client:
             return "SUPER C"
-        else:
-            return "METRO"
+        return "METRO"
+    
+    # Sécurité pour IGA/Sobeys (optionnel mais utile)
+    if "SOBEYS" in groupe:
+        if "IGA" in client:
+            return "IGA"
+        return "SOBEYS / AUTRES"
+        
     return groupe
 
 # --- MAIN APP ---
@@ -84,11 +91,8 @@ if df_raw_all is not None:
 
     df_raw[['CAISSE_12', 'SKU_BASE']] = df_raw.apply(harmoniser_vers_12, axis=1, args=(page,))
     
-    # --- NOUVELLE LOGIQUE BANNIÈRE ---
-    if 'GroupName' in df_raw.columns and 'CardName' in df_raw.columns:
-        df_raw['Banniere_Clean'] = df_raw.apply(subdiviser_banniere, axis=1)
-    else:
-        df_raw['Banniere_Clean'] = df_raw['GroupName'] if 'GroupName' in df_raw.columns else "Inconnu"
+    # Application de la nouvelle subdivision
+    df_raw['Banniere_Clean'] = df_raw.apply(subdiviser_banniere, axis=1)
 
     # --- SÉLECTEUR DE DATE & RESET ---
     st.sidebar.divider()
@@ -121,21 +125,21 @@ if df_raw_all is not None:
 
     # --- GRAPHIQUES ---
     st.divider()
-    t1, t2 = st.tabs(["📉 Volume & Dollars", "🏢 Analyse Bannières"])
+    t1, t2 = st.tabs(["📉 Performance Temporelle", "🏢 Analyse Bannières"])
     
     with t1:
         df_ytd_global = pd.concat([df_2026, df_2025_ytd])
         p1 = df_ytd_global.pivot_table(index='Mois_Nom', columns='Année', values='CAISSE_12', aggfunc='sum').fillna(0)
-        st.plotly_chart(px.line(p1.reset_index(), x='Mois_Nom', y=p1.columns, markers=True, title="Volume Mensuel YTD"), use_container_width=True)
+        st.plotly_chart(px.line(p1.reset_index(), x='Mois_Nom', y=p1.columns, markers=True, title="Volume Mensuel YTD (Base 12)"), use_container_width=True)
 
     with t2:
-        st.header("🏢 Top Bannières (Subdivision Metro/Super C)")
+        st.header("🏢 Répartition par Bannière")
         banner_data = df_filtered.groupby('Banniere_Clean')['CAISSE_12'].sum().reset_index().sort_values('CAISSE_12', ascending=False)
-        st.plotly_chart(px.pie(banner_data.head(12), values='CAISSE_12', names='Banniere_Clean', hole=0.4), use_container_width=True)
+        st.plotly_chart(px.pie(banner_data.head(15), values='CAISSE_12', names='Banniere_Clean', hole=0.4), use_container_width=True)
         st.dataframe(banner_data.rename(columns={'Banniere_Clean':'Bannière', 'CAISSE_12':'Caisses (12)'}), hide_index=True, use_container_width=True)
 
     # --- VENTES PAR SKU ---
-    st.header("📦 Performance par SKU")
+    st.header("📦 Performance par SKU (Période sélectionnée)")
     sku_data = df_filtered.groupby('ItemName').agg({'CAISSE_12':'sum', 'LineTotal':'sum'}).sort_values('CAISSE_12', ascending=False)
     st.dataframe(sku_data.style.format({'CAISSE_12': '{:,.1f}', 'LineTotal': '{:,.2f} $'}), use_container_width=True)
 
@@ -144,7 +148,7 @@ if df_raw_all is not None:
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         df_filtered.pivot_table(index='Banniere_Clean', columns='Année', values='LineTotal', aggfunc='sum').to_excel(writer, sheet_name='Finance_Bannieres')
         sku_data.to_excel(writer, sheet_name='Ventes_Par_SKU')
-    st.sidebar.download_button("📥 Télécharger Rapport Excel", data=output.getvalue(), file_name=f"Rapport_{page}_Subdivise.xlsx")
+    st.sidebar.download_button("📥 Télécharger Rapport Excel", data=output.getvalue(), file_name=f"Rapport_{page}_Clean.xlsx")
 
 else:
     st.error("Données Drive introuvables.")
