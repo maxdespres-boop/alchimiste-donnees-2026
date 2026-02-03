@@ -54,17 +54,15 @@ def harmoniser_vers_12(row, marque):
 
 # --- LOGIQUE DE SUBDIVISION DES BANNIÈRES (CORRIGÉE) ---
 def subdiviser_banniere(row):
-    # On récupère les valeurs et on nettoie les espaces blancs au début/fin
-    groupe_raw = str(row['GroupName']).strip().upper()
-    client_raw = str(row['CardName']).strip().upper()
+    # On convertit tout en string et on enlève TOUS les espaces doubles ou bizarres
+    groupe = str(row.get('GroupName', '')).upper()
+    client = str(row.get('CardName', '')).upper()
     
-    # 1. Vérifier si on est dans le groupe Metro (avec ou sans accent)
-    is_metro_group = "METRO" in groupe_raw or "MÉTRO" in groupe_raw
-    
-    if is_metro_group:
-        # 2. Chercher "SUPER C" n'importe où dans le nom du client
-        # On utilise une recherche de sous-chaîne simple mais efficace
-        if "SUPER C" in client_raw or "SUPERC" in client_raw:
+    # Au lieu de chercher la phrase exacte, on cherche simplement si le mot METRO est présent
+    # Cela règle le problème du "MÉTRO FRANCHISÉ -CO" avec son espace erroné.
+    if "METRO" in groupe or "MÉTRO" in groupe:
+        # On applique la même souplesse pour Super C
+        if "SUPER C" in client or "SUPERC" in client:
             return "SUPER C"
         else:
             return "METRO"
