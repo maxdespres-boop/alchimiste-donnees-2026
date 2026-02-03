@@ -30,9 +30,10 @@ def load_data_from_drive(folder_id):
             if item['name'].lower().endswith('.xlsx'):
                 df_temp = pd.read_excel(io.BytesIO(content), engine='openpyxl')
             else:
-                # Utilisation de latin1 pour bien lire les accents (MÉTRO) vus dans ton CSV
+                # Utilisation de latin1 pour lire correctement le "É" de MÉTRO
                 df_temp = pd.read_csv(io.BytesIO(content), sep=',', encoding='latin1', on_bad_lines='skip')
             
+            # Nettoyage des noms de colonnes
             df_temp.columns = df_temp.columns.str.strip()
             df_list.append(df_temp)
         except Exception:
@@ -57,7 +58,7 @@ page = st.sidebar.radio("Marque :", ["Alchimiste", "LOOP"])
 df_raw_all = load_data_from_drive(ID_DOSSIER_ALCHIMISTE if page == "Alchimiste" else ID_DOSSIER_LOOP)
 
 if df_raw_all is not None:
-    # Nettoyage colonnes numériques
+    # Nettoyage des colonnes numériques
     for col in ['LineQty', 'LineTotal']:
         if col in df_raw_all.columns:
             df_raw_all[col] = pd.to_numeric(df_raw_all[col].astype(str).str.replace(',', '.').str.replace(r'[^\d.-]', '', regex=True), errors='coerce').fillna(0)
@@ -79,20 +80,23 @@ if df_raw_all is not None:
     if "date_range" not in st.session_state: st.session_state["date_range"] = (ytd_start, date.today())
     date_sel = st.sidebar.date_input("Période d'analyse", value=st.session_state["date_range"], key="date_range")
 
-    # Filtrage et Subdivision
+    # Filtrage
     df_filtered = df_raw_all.copy()
     if isinstance(date_sel, tuple) and len(date_sel) == 2:
         df_filtered = df_raw_all[(df_raw_all['DateAnalyse'].dt.date >= date_sel[0]) & (df_raw_all['DateAnalyse'].dt.date <= date_sel[1])]
 
-    # LOGIQUE DE DÉTECTION METRO vs SUPER C
+    # --- LOGIQUE DE SUBDIVISION (BULLDOZER) ---
     if 'GroupName' in df_filtered.columns and 'CardName' in df_filtered.columns:
         df_filtered['Banniere_Clean'] = df_filtered['GroupName'].astype(str)
+        # On cherche METRO partout sans se soucier des accents
         is_metro = df_filtered['GroupName'].str.contains("METRO|MÉTRO", case=False, na=False)
+        # On cherche SUPER C dans le nom du client
         is_superc = df_filtered['CardName'].str.contains("SUPER C", case=False, na=False)
+        
         df_filtered.loc[is_metro, 'Banniere_Clean'] = "METRO"
         df_filtered.loc[is_metro & is_superc, 'Banniere_Clean'] = "SUPER C"
 
-    # Calculs YTD pour les KPIs
+    # Calculs YTD (Basés sur les colonnes renommées pour éviter le bug SyntaxError)
     df_2026 = df_raw_all[df_raw_all['Année'] == 2026]
     max_day_2026 = df_2026['Jour_Annee'].max() if not df_2026.empty else 366
     df_2025_ytd = df_raw_all[(df_raw_all['Année'] == 2025) & (df_raw_all['Jour_Annee'] <= max_day_2026)]
@@ -102,12 +106,12 @@ if df_raw_all is not None:
     
     c1, c2, c3, c4 = st.columns(4)
     v26, v25 = df_2026['CAISSE_12'].sum(), df_2025_ytd['CAISSE_12'].sum()
-    total_2026, total_2025 = df_2026['LineTotal'].sum(), df_2025_ytd['LineTotal'].sum()
+    ventes_2026, ventes_2025 = df_2026['LineTotal'].sum(), df_2025_ytd['LineTotal'].sum()
     
     c1.metric("Volume 2026 (12)", f"{v26:,.0f}")
-    c2.metric("Ventes 2026 ($)", f"{total_2026:,.0f} $")
+    c2.metric("Ventes 2026 ($)", f"{ventes_2026:,.0f} $")
     c3.metric("YOY Vol. (vs 2025)", f"{v25:,.0f}", delta=f"{v26-v25:,.0f}")
-    c4.metric("YOY Ventes (vs 2025)", f"{total_2025:,.0f} $", delta=f"{total_2026-total_2025:,.0f} $")
+    c4.metric("YOY Ventes (vs 2025)", f"{ventes_2025:,.0f} $", delta=f"{ventes_2026-ventes_2025:,.0f} $")
 
     st.divider()
     t1, t2 = st.tabs(["📉 Performance", "🏢 Bannières"])
@@ -128,7 +132,7 @@ if df_raw_all is not None:
     sku_data = df_filtered.groupby('ItemName').agg({'CAISSE_12':'sum', 'LineTotal':'sum'}).sort_values('CAISSE_12', ascending=False)
     st.dataframe(sku_data.style.format({'CAISSE_12': '{:,.1f}', 'LineTotal': '{:,.2f} $'}), use_container_width=True)
 
-    # Export Excel
+    # Export
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         df_filtered.pivot_table(index=b_col, columns='Année', values='LineTotal', aggfunc='sum').to_excel(writer, sheet_name='Finance')
