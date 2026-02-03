@@ -131,10 +131,42 @@ if df_raw_all is not None:
         st.plotly_chart(px.line(p1.reset_index(), x='Mois_Nom', y=p1.columns, markers=True, title="Volume Mensuel YTD (Base 12)"), use_container_width=True)
 
     with t2:
-        st.header("🏢 Répartition par Bannière (Nettoyée)")
+        st.header("🏢 Analyse des Bannières")
+        
+        # --- BLOC DE DIAGNOSTIC TEMPORAIRE ---
+        st.subheader("🔍 Diagnostic (À supprimer après)")
+        # On regarde ce qui contient "METRO" ou "MÉTRO"
+        diag_df = df_filtered[df_filtered['GroupName'].str.contains("METRO|MÉTRO", case=False, na=False)].head(5)
+        if not diag_df.empty:
+            st.write("Voici ce que l'ordi voit pour Metro :")
+            st.dataframe(diag_df[['GroupName', 'CardName']])
+        else:
+            st.warning("⚠️ L'ordi ne trouve aucune ligne avec le mot 'METRO' dans GroupName.")
+
+        # --- NOUVELLE LOGIQUE DE DÉTECTION SIMPLIFIÉE ---
+        def force_subdivision(row):
+            # On transforme en texte pur, sans accents, sans espaces bizarres
+            grp = str(row.get('GroupName', '')).upper().replace('É', 'E').replace('È', 'E')
+            name = str(row.get('CardName', '')).upper()
+            
+            # Test ultra large : si "METRO" est n'importe où
+            if "METRO" in grp:
+                if "SUPER C" in name or "SUPERC" in name:
+                    return "SUPER C"
+                return "METRO"
+            return grp
+
+        df_filtered['Banniere_Clean'] = df_filtered.apply(force_subdivision, axis=1)
+        
+        # --- AFFICHAGE DU GRAPHIQUE ---
         banner_data = df_filtered.groupby('Banniere_Clean')['CAISSE_12'].sum().reset_index().sort_values('CAISSE_12', ascending=False)
-        st.plotly_chart(px.pie(banner_data.head(15), values='CAISSE_12', names='Banniere_Clean', hole=0.4), use_container_width=True)
-        st.dataframe(banner_data.rename(columns={'Banniere_Clean':'Bannière', 'CAISSE_12':'Caisses (12)'}), hide_index=True, use_container_width=True)
+        
+        col_pie, col_tab = st.columns([2, 1])
+        with col_pie:
+            fig = px.pie(banner_data.head(15), values='CAISSE_12', names='Banniere_Clean', hole=0.4)
+            st.plotly_chart(fig, use_container_width=True)
+        with col_tab:
+            st.dataframe(banner_data, hide_index=True)
 
     # --- VENTES PAR SKU ---
     st.header("📦 Performance par SKU (Période sélectionnée)")
