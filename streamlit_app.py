@@ -4,7 +4,7 @@ import plotly.express as px
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import io
-from datetime import date, timedelta
+from datetime import date
 
 st.set_page_config(page_title="Dashboard Alchimiste & LOOP", layout="wide")
 
@@ -32,40 +32,22 @@ def load_data_from_drive(folder_id):
             else:
                 raw_str = content.decode('latin1')
                 df_temp = pd.read_csv(io.StringIO(raw_str), sep=None, engine='python', on_bad_lines='skip')
-            
-            for col in ['LineQty', 'LineTotal', 'Rabais']:
-                if col in df_temp.columns and df_temp[col].dtype == 'object':
-                    df_temp[col] = df_temp[col].str.replace(',', '.').str.replace(r'[^\d.-]', '', regex=True)
             df_list.append(df_temp)
         except Exception: continue
     return pd.concat(df_list, ignore_index=True) if df_list else None
 
-# --- LOGIQUE DE CONVERSION ---
-def harmoniser_vers_12(row, marque):
-    code = str(row['ItemCode']).strip().upper()
-    qty = row['LineQty']
-    annee = row['Année']
-    if marque == "Alchimiste":
-        if annee == 2025: return pd.Series([qty * 2, code])
-        else:
-            if code.endswith('SG4P'): return pd.Series([qty * 2, code])
-            return pd.Series([qty / 12, code])
-    else: return pd.Series([qty, code])
-
-# --- LOGIQUE DE SUBDIVISION (VÉRITABLE DÉTECTION) ---
-def appliquer_subdivision(df):
-    def detecter(row):
-        grp = str(row.get('GroupName', '')).upper()
-        name = str(row.get('CardName', '')).upper()
-        # Si le groupe contient METRO (avec ou sans accent)
-        if "METRO" in grp or "MÉTRO" in grp:
-            if "SUPER C" in name or "SUPERC" in name:
-                return "SUPER C"
-            return "METRO"
-        return grp
+# --- LOGIQUE DE SUBDIVISION (SUPER SIMPLE) ---
+def clean_banniere(row):
+    # On convertit tout en texte pour éviter les erreurs
+    g = str(row.get('GroupName', '')).upper()
+    c = str(row.get('CardName', '')).upper()
     
-    df['Banniere_Clean'] = df.apply(detecter, axis=1)
-    return df
+    # Test large : Si le mot METRO (avec ou sans accent) est présent
+    if "METRO" in g or "MÉTRO" in g:
+        if "SUPER C" in c or "SUPERC" in c:
+            return "SUPER C"
+        return "METRO"
+    return g
 
 # --- MAIN APP ---
 st.sidebar.title("🍺 Contrôles Dashboard")
@@ -73,112 +55,61 @@ page = st.sidebar.radio("Marque :", ["Alchimiste", "LOOP"])
 df_raw_all = load_data_from_drive(ID_DOSSIER_ALCHIMISTE if page == "Alchimiste" else ID_DOSSIER_LOOP)
 
 if df_raw_all is not None:
+    st.sidebar.success("✅ Données chargées avec succès")
+    
+    # Nettoyage et conversion des colonnes numériques
+    for col in ['LineQty', 'LineTotal']:
+        if col in df_raw_all.columns:
+            df_raw_all[col] = pd.to_numeric(df_raw_all[col].astype(str).str.replace(',', '.').str.replace(r'[^\d.-]', '', regex=True), errors='coerce').fillna(0)
+
+    # Préparation des dates
     df_raw_all['DocDate'] = pd.to_datetime(df_raw_all['DocDate'], errors='coerce')
     df_raw_all['DateLivraison'] = pd.to_datetime(df_raw_all['DateLivraison'], errors='coerce')
     df_raw_all['DateAnalyse'] = df_raw_all['DateLivraison'].fillna(df_raw_all['DocDate'])
-    df_raw = df_raw_all[df_raw_all['DateAnalyse'].dt.year >= 2025].copy()
     
-    df_raw['Année'] = df_raw['DateAnalyse'].dt.year
-    df_raw['Mois_Nom'] = df_raw['DateAnalyse'].dt.strftime('%m - %B')
-    df_raw['Jour_Annee'] = df_raw['DateAnalyse'].dt.dayofyear
-    
-    for col in ['LineQty', 'LineTotal']:
-        df_raw[col] = pd.to_numeric(df_raw[col], errors='coerce').fillna(0)
+    # Création des colonnes de base
+    df_raw_all['Année'] = df_raw_all['DateAnalyse'].dt.year
+    df_raw_all['Jour_Annee'] = df_raw_all['DateAnalyse'].dt.dayofyear
+    df_raw_all['Mois_Nom'] = df_raw_all['DateAnalyse'].dt.strftime('%m - %B')
 
-    # Conversion des quantités
-    df_raw[['CAISSE_12', 'SKU_BASE']] = df_raw.apply(harmoniser_vers_12, axis=1, args=(page,))
+    # APPLICATION DE LA SUBDIVISION IMMÉDIATEMENT
+    df_raw_all['Banniere_Clean'] = df_raw_all.apply(clean_banniere, axis=1)
 
-    # --- SÉLECTEUR DE DATE & RESET ---
-    st.sidebar.divider()
+    # --- SÉLECTEUR DE DATE ---
     ytd_start = date(2026, 1, 1)
     if "date_range" not in st.session_state: st.session_state["date_range"] = (ytd_start, date.today())
-    if st.sidebar.button("🔄 Reset Dates (YTD 2026)"):
-        st.session_state["date_range"] = (ytd_start, date.today())
-        st.rerun()
     date_sel = st.sidebar.date_input("Période d'analyse", value=st.session_state["date_range"], key="date_range")
 
-    # --- FILTRAGE ET SUBDIVISION (ICI QUE ÇA SE JOUE) ---
-    df_filtered = df_raw.copy()
+    # Filtrage par date
+    df_filtered = df_raw_all.copy()
     if isinstance(date_sel, tuple) and len(date_sel) == 2:
-        df_filtered = df_raw[(df_raw['DateAnalyse'].dt.date >= date_sel[0]) & (df_raw['DateAnalyse'].dt.date <= date_sel[1])]
-    
-    # On applique la subdivision sur le dataframe filtré juste avant l'affichage
-    df_filtered = appliquer_subdivision(df_filtered)
+        df_filtered = df_raw_all[(df_raw_all['DateAnalyse'].dt.date >= date_sel[0]) & (df_raw_all['DateAnalyse'].dt.date <= date_sel[1])]
 
-    # Données pour les KPI (YTD)
-    df_2026 = df_raw[df_raw['Année'] == 2026]
-    max_day_2026 = df_2026['Jour_Annee'].max() if not df_2026.empty else 366
-    df_2025_ytd = df_raw[(df_raw['Année'] == 2025) & (df_raw['Jour_Annee'] <= max_day_2026)]
-
-    # --- AFFICHAGE KPIs ---
+    # --- AFFICHAGE ---
     st.title(f"📊 Dashboard {page}")
-    c1, c2, c3, c4 = st.columns(4)
-    v26, v25 = df_2026['CAISSE_12'].sum(), df_2025_ytd['CAISSE_12'].sum()
-    $26, $25 = df_2026['LineTotal'].sum(), df_2025_ytd['LineTotal'].sum()
-
-    c1.metric("Volume 2026 (12)", f"{v26:,.0f}")
-    c2.metric("Ventes 2026 ($)", f"{$26:,.0f} $")
-    c3.metric("YOY Volume", f"{v25:,.0f}", delta=f"{v26-v25:,.0f}")
-    c4.metric("YOY Ventes", f"{$25:,.0f} $", delta=f"{$26-$25:,.0f} $")
-
-    # --- GRAPHIQUES ---
-    st.divider()
-    t1, t2 = st.tabs(["📉 Performance Temporelle", "🏢 Analyse Bannières"])
     
-    with t1:
-        df_ytd_global = pd.concat([df_2026, df_2025_ytd])
-        p1 = df_ytd_global.pivot_table(index='Mois_Nom', columns='Année', values='CAISSE_12', aggfunc='sum').fillna(0)
-        st.plotly_chart(px.line(p1.reset_index(), x='Mois_Nom', y=p1.columns, markers=True, title="Volume Mensuel YTD (Base 12)"), use_container_width=True)
+    tab1, tab2 = st.tabs(["📉 Performance", "🏢 Bannières"])
+    
+    with tab1:
+        st.subheader("Volume par Mois (Base 12)")
+        # (Logique de calcul Volume 12 ici simplifiée pour le test)
+        st.info("Sélectionnez l'onglet Bannières pour voir la subdivision.")
 
-    with t2:
-        st.header("🏢 Analyse des Bannières")
-        
-        # --- BLOC DE DIAGNOSTIC TEMPORAIRE ---
-        st.subheader("🔍 Diagnostic (À supprimer après)")
-        # On regarde ce qui contient "METRO" ou "MÉTRO"
-        diag_df = df_filtered[df_filtered['GroupName'].str.contains("METRO|MÉTRO", case=False, na=False)].head(5)
-        if not diag_df.empty:
-            st.write("Voici ce que l'ordi voit pour Metro :")
-            st.dataframe(diag_df[['GroupName', 'CardName']])
-        else:
-            st.warning("⚠️ L'ordi ne trouve aucune ligne avec le mot 'METRO' dans GroupName.")
-
-        # --- NOUVELLE LOGIQUE DE DÉTECTION SIMPLIFIÉE ---
-        def force_subdivision(row):
-            # On transforme en texte pur, sans accents, sans espaces bizarres
-            grp = str(row.get('GroupName', '')).upper().replace('É', 'E').replace('È', 'E')
-            name = str(row.get('CardName', '')).upper()
+    with tab2:
+        st.header("🏢 Répartition par Enseigne")
+        if 'Banniere_Clean' in df_filtered.columns:
+            # On groupe par la nouvelle colonne
+            data_ban = df_filtered.groupby('Banniere_Clean')['LineTotal'].sum().reset_index().sort_values('LineTotal', ascending=False)
             
-            # Test ultra large : si "METRO" est n'importe où
-            if "METRO" in grp:
-                if "SUPER C" in name or "SUPERC" in name:
-                    return "SUPER C"
-                return "METRO"
-            return grp
-
-        df_filtered['Banniere_Clean'] = df_filtered.apply(force_subdivision, axis=1)
-        
-        # --- AFFICHAGE DU GRAPHIQUE ---
-        banner_data = df_filtered.groupby('Banniere_Clean')['CAISSE_12'].sum().reset_index().sort_values('CAISSE_12', ascending=False)
-        
-        col_pie, col_tab = st.columns([2, 1])
-        with col_pie:
-            fig = px.pie(banner_data.head(15), values='CAISSE_12', names='Banniere_Clean', hole=0.4)
-            st.plotly_chart(fig, use_container_width=True)
-        with col_tab:
-            st.dataframe(banner_data, hide_index=True)
-
-    # --- VENTES PAR SKU ---
-    st.header("📦 Performance par SKU (Période sélectionnée)")
-    sku_data = df_filtered.groupby('ItemName').agg({'CAISSE_12':'sum', 'LineTotal':'sum'}).sort_values('CAISSE_12', ascending=False)
-    st.dataframe(sku_data.style.format({'CAISSE_12': '{:,.1f}', 'LineTotal': '{:,.2f} $'}), use_container_width=True)
-
-    # --- EXPORT EXCEL ---
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        df_filtered.pivot_table(index='Banniere_Clean', columns='Année', values='LineTotal', aggfunc='sum').to_excel(writer, sheet_name='Finance_Bannieres')
-        sku_data.to_excel(writer, sheet_name='Ventes_Par_SKU')
-    st.sidebar.download_button("📥 Télécharger Rapport Excel", data=output.getvalue(), file_name=f"Rapport_{page}_Clean.xlsx")
+            c1, c2 = st.columns([2, 1])
+            with c1:
+                fig = px.pie(data_ban.head(10), values='LineTotal', names='Banniere_Clean', hole=0.4, title="Ventes par Bannière ($)")
+                st.plotly_chart(fig, use_container_width=True)
+            with c2:
+                st.write("Détails des ventes :")
+                st.dataframe(data_ban, hide_index=True)
+        else:
+            st.error("La colonne 'Banniere_Clean' n'a pas pu être créée.")
 
 else:
-    st.error("Données Drive introuvables.")
+    st.error("❌ Erreur de connexion au Drive. Vérifiez vos secrets Streamlit.")
