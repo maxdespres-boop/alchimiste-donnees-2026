@@ -54,18 +54,22 @@ def harmoniser_vers_12(row, marque):
 
 # --- LOGIQUE DE SUBDIVISION DES BANNIÈRES (CORRIGÉE) ---
 def subdiviser_banniere(row):
-    # On convertit tout en string et on enlève TOUS les espaces doubles ou bizarres
+    # On récupère les valeurs et on met tout en majuscules
     groupe = str(row.get('GroupName', '')).upper()
     client = str(row.get('CardName', '')).upper()
     
-    # Au lieu de chercher la phrase exacte, on cherche simplement si le mot METRO est présent
-    # Cela règle le problème du "MÉTRO FRANCHISÉ -CO" avec son espace erroné.
-    if "METRO" in groupe or "MÉTRO" in groupe:
-        # On applique la même souplesse pour Super C
+    # On teste les deux orthographes possibles pour être blindé
+    est_un_metro = "MÉTRO" in groupe or "METRO" in groupe
+    
+    if est_un_metro:
+        # On cherche SUPER C dans le nom du client
         if "SUPER C" in client or "SUPERC" in client:
             return "SUPER C"
         else:
             return "METRO"
+    
+    # Si ce n'est pas un Metro, on retourne le groupe original nettoyé
+    return groupe.strip()
 
 # --- MAIN APP ---
 st.sidebar.title("🍺 Contrôles Dashboard")
