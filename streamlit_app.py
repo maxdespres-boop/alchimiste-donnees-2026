@@ -134,6 +134,52 @@ if df_raw_all is not None:
         s1.metric("2026 YTD", f"{df_2026_full['LineTotal'].sum():,.0f} $")
         s2.metric("2025 YTD", f"{df_2025_ytd['LineTotal'].sum():,.0f} $", delta=f"{df_2026_full['LineTotal'].sum() - df_2025_ytd['LineTotal'].sum():,.0f} $")
 
+# --- VENTES DERNIÈRE SEMAINE PAR SKU ---
+st.divider()
+st.subheader("📦 Ventes par SKU – Dernière semaine disponible")
+
+# Identifier la dernière semaine disponible 2026
+current_week = df_2026_full['Semaine'].max() if not df_2026_full.empty else None
+
+if current_week:
+    df_last_week = df_2026_full[df_2026_full['Semaine'] == current_week]
+
+    sku_last_week = (
+        df_last_week
+        .groupby('ItemName')
+        .agg({
+            'CAISSE EQ': 'sum',
+            'LineTotal': 'sum'
+        })
+        .reset_index()
+        .rename(columns={
+            'ItemName': 'SKU',
+            'CAISSE EQ': 'Caisses',
+            'LineTotal': 'Ventes ($)'
+        })
+        .sort_values('Caisses', ascending=False)
+    )
+
+    # Ajouter ligne total
+    total_row = pd.DataFrame({
+        'SKU': ['TOTAL'],
+        'Caisses': [sku_last_week['Caisses'].sum()],
+        'Ventes ($)': [sku_last_week['Ventes ($)'].sum()]
+    })
+
+    sku_last_week = pd.concat([sku_last_week, total_row], ignore_index=True)
+
+    st.dataframe(
+        sku_last_week.style.format({
+            'Caisses': '{:,.0f}',
+            'Ventes ($)': '{:,.2f} $'
+        }),
+        use_container_width=True,
+        hide_index=True
+    )
+else:
+    st.info("Aucune donnée disponible pour 2026.")
+
     # --- VUE MENSUELLE ---
     st.divider()
     pivot_vol = df_raw.pivot_table(index='Mois_Nom', columns='Année', values='CAISSE EQ', aggfunc='sum').fillna(0)
