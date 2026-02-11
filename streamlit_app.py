@@ -138,6 +138,56 @@ if df_raw_all is not None:
         s1.metric("2026 YTD", f"{df_2026_full['LineTotal'].sum():,.0f} $")
         s2.metric("2025 YTD", f"{df_2025_ytd['LineTotal'].sum():,.0f} $", delta=f"{df_2026_full['LineTotal'].sum() - df_2025_ytd['LineTotal'].sum():,.0f} $")
 
+    # --- VENTES DERNIÈRE SEMAINE ---
+    st.divider()
+    st.header("📊 Ventes de la dernière semaine")
+    
+    # Identifier la dernière semaine dans les données
+    derniere_semaine = df_raw['Semaine'].max()
+    derniere_annee = df_raw[df_raw['Semaine'] == derniere_semaine]['Année'].max()
+    df_derniere_semaine = df_raw[(df_raw['Semaine'] == derniere_semaine) & (df_raw['Année'] == derniere_annee)]
+    
+    if not df_derniere_semaine.empty:
+        # Agréger par SKU
+        ventes_semaine = df_derniere_semaine.groupby('ItemName').agg({
+            'CAISSE EQ': 'sum',
+            'LineTotal': 'sum'
+        }).reset_index()
+        
+        ventes_semaine = ventes_semaine.rename(columns={
+            'ItemName': 'SKU',
+            'CAISSE EQ': 'Caisses',
+            'LineTotal': 'Ventes ($)'
+        })
+        
+        # Trier par ventes en dollars décroissant
+        ventes_semaine = ventes_semaine.sort_values('Ventes ($)', ascending=False)
+        
+        # Calculer les totaux
+        total_caisses = ventes_semaine['Caisses'].sum()
+        total_dollars = ventes_semaine['Ventes ($)'].sum()
+        
+        # Afficher les métriques de totaux
+        col1, col2, col3 = st.columns([2, 1, 1])
+        with col1:
+            st.metric("Semaine", f"#{int(derniere_semaine)} - {int(derniere_annee)}")
+        with col2:
+            st.metric("Total Caisses", f"{total_caisses:,.0f}")
+        with col3:
+            st.metric("Total Ventes", f"{total_dollars:,.2f} $")
+        
+        # Afficher le tableau avec formatage
+        st.dataframe(
+            ventes_semaine.style.format({
+                'Caisses': '{:.0f}',
+                'Ventes ($)': '{:,.2f} $'
+            }),
+            use_container_width=True,
+            hide_index=True
+        )
+    else:
+        st.warning("Aucune donnée disponible pour la dernière semaine.")
+
     # --- VUE MENSUELLE ---
     st.divider()
     pivot_vol = df_raw.pivot_table(index='Mois_Nom', columns='Année', values='CAISSE EQ', aggfunc='sum').fillna(0)
