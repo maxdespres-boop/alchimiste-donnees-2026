@@ -104,7 +104,54 @@ if df_raw_all is not None:
         df_raw[['CAISSE EQ', 'SKU_BASE']] = df_raw.apply(harmoniser_formats_alc, axis=1)
     else:
         df_raw['CAISSE EQ'] = df_raw['LineQty']
+# --- SECTION RÉTRACTABLE : ANALYSE DU DERNIER FICHIER ---
+with st.expander("🔔 ANALYSE DU DERNIER ARRIVAGE (Semaine vs Année Précédente)", expanded=True):
+    # 1. Isoler les données du dernier fichier
+    df_latest = df_raw_all[df_raw_all['_source_file'] == latest_id].copy()
+    target_week = df_latest['Semaine'].max()
+    
+    st.subheader(f"Focus : Semaine {target_week}")
+    st.write(f"Comparaison des performances du dernier fichier reçu contre la même semaine en 2025.")
 
+    # 2. Préparer les données comparatives (Semaine X 2026 vs Semaine X 2025)
+    df_hist_week = df_raw_all[df_raw_all['Semaine'] == target_week].copy()
+    
+    # Pivot pour mettre les années en colonnes
+    sku_comp = df_hist_week.pivot_table(
+        index='ItemName', 
+        columns='Année', 
+        values=['CAISSE EQ', 'LineTotal'], 
+        aggfunc='sum'
+    ).fillna(0)
+
+    # 3. Calcul des Variations et Totaux
+    if (2026 in sku_comp.columns.get_level_values(1)) and (2025 in sku_comp.columns.get_level_values(1)):
+        # Calcul des colonnes de variation
+        sku_comp[('Variation', 'Volume')] = sku_comp[('CAISSE EQ', 2026)] - sku_comp[('CAISSE EQ', 2025)]
+        sku_comp[('Variation', 'Dollars ($)')] = sku_comp[('LineTotal', 2026)] - sku_comp[('LineTotal', 2025)]
+        
+        # Ajout de la ligne de Total Global
+        total_row = sku_comp.sum()
+        sku_comp.loc['--- TOTAL GLOBAL ---'] = total_row
+
+        # 4. Affichage avec formatage
+        # On définit les formats pour les colonnes (0 décimales pour volume, 2 pour $)
+        formats = {}
+        for col in sku_comp.columns:
+            if 'LineTotal' in col[0] or 'Dollars' in col[1]:
+                formats[col] = "{:,.2f} $"
+            else:
+                formats[col] = "{:,.0f}"
+
+        st.dataframe(
+            sku_comp.style.format(formats).apply(
+                lambda x: ['font-weight: bold; background-color: #f0f2f6' if x.name == '--- TOTAL GLOBAL ---' else '' for _ in x], 
+                axis=1
+            ), 
+            use_container_width=True
+        )
+    else:
+        st.warning("Données comparatives insuffisantes pour générer le Year over Year sur cette semaine.")
     # --- FILTRES SIDEBAR (RÉINTÉGRÉS) ---
     st.sidebar.divider()
     start_ytd = date(2026, 1, 1)
