@@ -117,7 +117,7 @@ if df_raw_all is not None:
         df_filtered = df_raw[(df_raw['DateAnalyse'].dt.date >= date_sel[0]) & (df_raw['DateAnalyse'].dt.date <= date_sel[1])]
 
     # --- SECTION RÉTRACTABLE : ANALYSE DU DERNIER FICHIER ---
-    with st.expander("🔔 ANALYSE DU DERNIER ARRIVAGE (Semaine vs Année Précédente)", expanded=True):
+with st.expander("🔔 ANALYSE DU DERNIER ARRIVAGE (Semaine vs Année Précédente)", expanded=True):
     # 1. Isoler les données du dernier fichier
     df_latest = df_raw_all[df_raw_all['_source_file'] == latest_id].copy()
     target_week = df_latest['Semaine'].max()
@@ -164,7 +164,6 @@ if df_raw_all is not None:
         )
     else:
         st.warning("Données comparatives insuffisantes pour générer le Year over Year sur cette semaine.")
-    
     # --- KPI COMPARATIFS YTD ---
     df_2026_full = df_raw[df_raw['Année'] == 2026]
     max_day_2026 = df_2026_full['Jour_Annee'].max() if not df_2026_full.empty else 366
