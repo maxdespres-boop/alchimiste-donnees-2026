@@ -35,6 +35,9 @@ def load_data_from_drive(folder_id):
                     df_temp = pd.read_csv(io.StringIO(raw_str), sep=',', quotechar='"', on_bad_lines='skip')
                 except:
                     df_temp = pd.read_csv(io.StringIO(raw_str), sep=';', quotechar='"', on_bad_lines='skip')
+            
+            # Nettoyage des colonnes
+            df_temp.columns = df_temp.columns.str.strip()
             for col in ['LineQty', 'LineTotal', 'Rabais']:
                 if col in df_temp.columns and df_temp[col].dtype == 'object':
                     df_temp[col] = df_temp[col].str.replace(',', '.').str.replace(r'[^\d.-]', '', regex=True)
@@ -86,7 +89,7 @@ page = st.sidebar.radio("Marque :", ["Alchimiste", "LOOP"])
 df_raw_all = load_data_from_drive(ID_DOSSIER_ALCHIMISTE if page == "Alchimiste" else ID_DOSSIER_LOOP)
 
 if df_raw_all is not None:
-    # --- PRÉ-TRAITEMENT DES DATES ---
+    # --- PRÉ-TRAITEMENT DES DONNÉES ---
     df_raw_all['DocDate'] = pd.to_datetime(df_raw_all['DocDate'], errors='coerce')
     df_raw_all['DateLivraison'] = pd.to_datetime(df_raw_all['DateLivraison'], errors='coerce')
     df_raw_all['DateAnalyse'] = df_raw_all['DateLivraison'].fillna(df_raw_all['DocDate'])
@@ -100,21 +103,23 @@ if df_raw_all is not None:
     df_raw['Jour_Annee'] = df_raw['DateAnalyse'].dt.dayofyear
     df_raw['Semaine'] = df_raw['DateAnalyse'].dt.isocalendar().week
 
+    # --- LOGIQUE DE SUBDIVISION MÉTRO / SUPER C ---
+    if 'GroupName' in df_raw.columns and 'CardName' in df_raw.columns:
+        df_raw['Bannière'] = df_raw['GroupName'].astype(str)
+        # Détection Metro (avec ou sans accent)
+        mask_metro = df_raw['GroupName'].str.contains("METRO|MÉTRO", case=False, na=False)
+        # Détection Super C dans le nom du client
+        mask_superc = df_raw['CardName'].str.contains("SUPER C", case=False, na=False)
+        
+        df_raw.loc[mask_metro, 'Bannière'] = "METRO"
+        df_raw.loc[mask_metro & mask_superc, 'Bannière'] = "SUPER C"
+    else:
+        df_raw['Bannière'] = df_raw['GroupName'] if 'GroupName' in df_raw.columns else "Inconnu"
+
     if page == "Alchimiste":
         df_raw[['CAISSE EQ', 'SKU_BASE']] = df_raw.apply(harmoniser_formats_alc, axis=1)
     else:
         df_raw['CAISSE EQ'] = df_raw['LineQty']
-
-    # --- FILTRES SIDEBAR (RÉINTÉGRÉS) ---
-    st.sidebar.divider()
-    start_ytd = date(2026, 1, 1)
-    if "date_range" not in st.session_state: st.session_state["date_range"] = (start_ytd, date.today())
-    if st.sidebar.button("🔄 Reset YTD"): st.session_state["date_range"] = (start_ytd, date.today())
-    date_sel = st.sidebar.date_input("Analyse détaillée (Graphs)", value=st.session_state["date_range"], key="date_range")
-
-    df_filtered = df_raw.copy()
-    if isinstance(date_sel, tuple) and len(date_sel) == 2:
-        df_filtered = df_raw[(df_raw['DateAnalyse'].dt.date >= date_sel[0]) & (df_raw['DateAnalyse'].dt.date <= date_sel[1])]
 
     # --- KPI COMPARATIFS YTD ---
     df_2026_full = df_raw[df_raw['Année'] == 2026]
@@ -122,6 +127,9 @@ if df_raw_all is not None:
     df_2025_ytd = df_raw[(df_raw['Année'] == 2025) & (df_raw['Jour_Annee'] <= max_day_2026)]
 
     st.title(f"📊 Dashboard {page}")
+    
+    # 1. SECTION YTD GLOBAL
+    st.header("📈 Performance Annuelle (YTD)")
     c1, c2 = st.columns(2)
     with c1:
         st.subheader("📦 Volume (Eq. 12)")
@@ -134,6 +142,34 @@ if df_raw_all is not None:
         s1.metric("2026 YTD", f"{df_2026_full['LineTotal'].sum():,.0f} $")
         s2.metric("2025 YTD", f"{df_2025_ytd['LineTotal'].sum():,.0f} $", delta=f"{df_2026_full['LineTotal'].sum() - df_2025_ytd['LineTotal'].sum():,.0f} $")
 
+    # 2. SECTION RÉSUMÉ DERNIÈRE SEMAINE (RÉINTÉGRÉE)
+    st.divider()
+    current_week = df_2026_full['Semaine'].max() if not df_2026_full.empty else 1
+    df_w_2026 = df_2026_full[df_2026_full['Semaine'] == current_week]
+    df_w_2025 = df_raw[(df_raw['Année'] == 2025) & (df_raw['Semaine'] == current_week)]
+    
+    vol_w_26 = df_w_2026['CAISSE EQ'].sum()
+    vol_w_25 = df_w_2025['CAISSE EQ'].sum()
+    val_w_26 = df_w_2026['LineTotal'].sum()
+    val_w_25 = df_w_2025['LineTotal'].sum()
+
+    st.header(f"📅 Résumé Semaine Actuelle (Sem {current_week})")
+    cw1, cw2, cw3, cw4 = st.columns(4)
+    cw1.metric("Volume 2026", f"{vol_w_26:,.0f}")
+    cw2.metric("vs Semaine 2025", f"{vol_w_25:,.0f}", delta=f"{vol_w_26 - vol_w_25:,.0f}")
+    cw3.metric("Ventes 2026", f"{val_w_26:,.0f} $")
+    cw4.metric("vs Semaine 2025", f"{val_w_25:,.0f} $", delta=f"{val_w_26 - val_w_25:,.0f} $")
+
+    # --- FILTRES POUR LES GRAPHIQUES ---
+    st.sidebar.divider()
+    start_ytd = date(2026, 1, 1)
+    if "date_range" not in st.session_state: st.session_state["date_range"] = (start_ytd, date.today())
+    date_sel = st.sidebar.date_input("Filtrer les graphiques ci-dessous :", value=st.session_state["date_range"], key="date_range")
+
+    df_filtered = df_raw.copy()
+    if isinstance(date_sel, tuple) and len(date_sel) == 2:
+        df_filtered = df_raw[(df_raw['DateAnalyse'].dt.date >= date_sel[0]) & (df_raw['DateAnalyse'].dt.date <= date_sel[1])]
+
     # --- VUE MENSUELLE ---
     st.divider()
     pivot_vol = df_raw.pivot_table(index='Mois_Nom', columns='Année', values='CAISSE EQ', aggfunc='sum').fillna(0)
@@ -141,43 +177,17 @@ if df_raw_all is not None:
     
     tab_vol, tab_val = st.tabs(["📉 Volume Mensuel", "💵 Argent Mensuel"])
     with tab_vol:
-        st.plotly_chart(px.line(pivot_vol.reset_index(), x='Mois_Nom', y=pivot_vol.columns, markers=True), use_container_width=True)
-        st.dataframe(pivot_vol.style.format("{:.0f}"), use_container_width=True)
+        st.plotly_chart(px.line(pivot_vol.reset_index(), x='Mois_Nom', y=pivot_vol.columns, markers=True, title="Historique Volume"), use_container_width=True)
     with tab_val:
-        st.plotly_chart(px.line(pivot_val.reset_index(), x='Mois_Nom', y=pivot_val.columns, markers=True), use_container_width=True)
-        st.dataframe(pivot_val.style.format("{:,.2f} $"), use_container_width=True)
-
-    # --- LOGIQUE EXPORT EXCEL (AVEC WoW) ---
-    current_week = df_2026_full['Semaine'].max() if not df_2026_full.empty else 1
-    df_w_2026 = df_2026_full[df_2026_full['Semaine'] == current_week]
-    df_w_2025 = df_raw[(df_raw['Année'] == 2025) & (df_raw['Semaine'] == current_week)]
-    
-    w26 = df_w_2026.groupby('ItemName')['CAISSE EQ'].sum()
-    w25 = df_w_2025.groupby('ItemName')['CAISSE EQ'].sum()
-    
-    df_week_comp = pd.DataFrame({f'Sem {current_week} (2025)': w25, f'Sem {current_week} (2026)': w26}).fillna(0)
-    df_week_comp['Var. Absolue'] = df_week_comp.iloc[:, 1] - df_week_comp.iloc[:, 0]
-    df_week_comp['Variation %'] = (df_week_comp['Var. Absolue'] / df_week_comp.iloc[:, 0].replace(0, 1))
-
-    pivot_sku_xls = df_2026_full.pivot_table(index='ItemName', columns='Mois_Nom', values='CAISSE EQ', aggfunc='sum').fillna(0)
-    pivot_banner_xls = df_2026_full.groupby('GroupName')['CAISSE EQ'].sum().to_frame()
-
-    excel_file = generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku_xls, pivot_banner_xls)
-    st.sidebar.download_button(f"📥 Télécharger Rapport {page} (Excel)", data=excel_file, file_name=f"Rapport_{page}_{date.today()}.xlsx")
+        st.plotly_chart(px.line(pivot_val.reset_index(), x='Mois_Nom', y=pivot_val.columns, markers=True, title="Historique Ventes"), use_container_width=True)
 
     # --- TOP BANNIÈRES ET CLIENTS ---
     st.divider()
     col_left, col_right = st.columns(2)
     with col_left:
         st.header("🏢 Top Bannières")
-        if 'GroupName' in df_filtered.columns:
-            # Créer une colonne ajustée qui sépare les SUPER C
-            df_filtered['GroupName_Adjusted'] = df_filtered.apply(
-                lambda row: 'SUPER C' if 'SUPER C' in str(row['CardName']).upper() else row['GroupName'], 
-                axis=1
-            )
-            banner_data = df_filtered.groupby('GroupName_Adjusted')['CAISSE EQ'].sum().reset_index().sort_values('CAISSE EQ', ascending=False)
-            st.plotly_chart(px.pie(banner_data.head(10), values='CAISSE EQ', names='GroupName_Adjusted', hole=0.4), use_container_width=True)
+        banner_data = df_filtered.groupby('Bannière')['CAISSE EQ'].sum().reset_index().sort_values('CAISSE EQ', ascending=False)
+        st.plotly_chart(px.pie(banner_data.head(10), values='CAISSE EQ', names='Bannière', hole=0.4), use_container_width=True)
     with col_right:
         st.header("👥 Top 15 Clients")
         client_data = df_filtered.groupby('CardName')['CAISSE EQ'].sum().reset_index().sort_values('CAISSE EQ', ascending=False).head(15)
@@ -191,6 +201,19 @@ if df_raw_all is not None:
     sku_yoy = pd.DataFrame({'2025 (YTD)': sku_2025_ytd_val, '2026 (YTD)': sku_2026_ytd}).fillna(0)
     sku_yoy['Variation'] = sku_yoy['2026 (YTD)'] - sku_yoy['2025 (YTD)']
     st.dataframe(sku_yoy.sort_values('2026 (YTD)', ascending=False).style.format("{:.0f}").bar(subset=['Variation'], align='mid', color=['#ff9999', '#99ff99']), use_container_width=True)
+
+    # --- EXPORT EXCEL ---
+    w26 = df_w_2026.groupby('ItemName')['CAISSE EQ'].sum()
+    w25 = df_w_2025.groupby('ItemName')['CAISSE EQ'].sum()
+    df_week_comp = pd.DataFrame({f'Sem {current_week} (2025)': w25, f'Sem {current_week} (2026)': w26}).fillna(0)
+    df_week_comp['Var. Absolue'] = df_week_comp.iloc[:, 1] - df_week_comp.iloc[:, 0]
+    df_week_comp['Variation %'] = (df_week_comp['Var. Absolue'] / df_week_comp.iloc[:, 0].replace(0, 1))
+
+    pivot_sku_xls = df_2026_full.pivot_table(index='ItemName', columns='Mois_Nom', values='CAISSE EQ', aggfunc='sum').fillna(0)
+    pivot_banner_xls = df_2026_full.groupby('Bannière')['CAISSE EQ'].sum().to_frame()
+
+    excel_file = generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku_xls, pivot_banner_xls)
+    st.sidebar.download_button(f"📥 Télécharger Rapport {page} (Excel)", data=excel_file, file_name=f"Rapport_{page}_{date.today()}.xlsx")
 
 else:
     st.error("Données introuvables. Vérifiez vos dossiers Drive.")
