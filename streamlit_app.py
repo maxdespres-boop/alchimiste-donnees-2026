@@ -21,7 +21,8 @@ def load_data_from_drive(folder_id):
     service = get_gdrive_service()
     query = f"'{folder_id}' in parents and (name contains '.csv' or name contains '.xlsx' or name contains '.CSV') and trashed = false"
     items = service.files().list(q=query, fields="files(id, name)").execute().get('files', [])
-    if not items: return None
+    if not items: 
+        return None
     df_list = []
     for item in items:
         try:
@@ -39,7 +40,8 @@ def load_data_from_drive(folder_id):
                 if col in df_temp.columns and df_temp[col].dtype == 'object':
                     df_temp[col] = df_temp[col].str.replace(',', '.').str.replace(r'[^\d.-]', '', regex=True)
             df_list.append(df_temp)
-        except Exception: continue
+        except Exception:
+            continue
     return pd.concat(df_list, ignore_index=True) if df_list else None
 
 # --- LOGIQUE DE CONVERSION ---
@@ -108,8 +110,10 @@ if df_raw_all is not None:
     # --- FILTRES SIDEBAR (RÉINTÉGRÉS) ---
     st.sidebar.divider()
     start_ytd = date(2026, 1, 1)
-    if "date_range" not in st.session_state: st.session_state["date_range"] = (start_ytd, date.today())
-    if st.sidebar.button("🔄 Reset YTD"): st.session_state["date_range"] = (start_ytd, date.today())
+    if "date_range" not in st.session_state:
+        st.session_state["date_range"] = (start_ytd, date.today())
+    if st.sidebar.button("🔄 Reset YTD"):
+        st.session_state["date_range"] = (start_ytd, date.today())
     date_sel = st.sidebar.date_input("Analyse détaillée (Graphs)", value=st.session_state["date_range"], key="date_range")
 
     df_filtered = df_raw.copy()
