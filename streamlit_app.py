@@ -142,12 +142,14 @@ if df_raw_all is not None:
     st.divider()
     st.header("📊 Ventes de la dernière semaine")
     
-    # Identifier la dernière semaine dans les données
-    derniere_semaine = df_raw['Semaine'].max()
-    derniere_annee = df_raw[df_raw['Semaine'] == derniere_semaine]['Année'].max()
-    df_derniere_semaine = df_raw[(df_raw['Semaine'] == derniere_semaine) & (df_raw['Année'] == derniere_annee)]
+    # Identifier la dernière semaine dans les données 2026
+    df_2026 = df_raw[df_raw['Année'] == 2026].copy()
     
-    if not df_derniere_semaine.empty:
+    if not df_2026.empty:
+        # Trouver la dernière semaine
+        derniere_semaine = df_2026['Semaine'].max()
+        df_derniere_semaine = df_2026[df_2026['Semaine'] == derniere_semaine]
+        
         # Agréger par SKU
         ventes_semaine = df_derniere_semaine.groupby('ItemName').agg({
             'CAISSE EQ': 'sum',
@@ -170,7 +172,7 @@ if df_raw_all is not None:
         # Afficher les métriques de totaux
         col1, col2, col3 = st.columns([2, 1, 1])
         with col1:
-            st.metric("Semaine", f"#{int(derniere_semaine)} - {int(derniere_annee)}")
+            st.metric("Semaine", f"#{int(derniere_semaine)} - 2026")
         with col2:
             st.metric("Total Caisses", f"{total_caisses:,.0f}")
         with col3:
@@ -179,14 +181,14 @@ if df_raw_all is not None:
         # Afficher le tableau avec formatage
         st.dataframe(
             ventes_semaine.style.format({
-                'Caisses': '{:.0f}',
+                'Caisses': '{:.2f}',
                 'Ventes ($)': '{:,.2f} $'
             }),
             use_container_width=True,
             hide_index=True
         )
     else:
-        st.warning("Aucune donnée disponible pour la dernière semaine.")
+        st.warning("Aucune donnée disponible pour 2026.")
 
     # --- VUE MENSUELLE ---
     st.divider()
