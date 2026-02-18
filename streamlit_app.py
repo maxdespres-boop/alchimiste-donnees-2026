@@ -107,18 +107,32 @@ if df_raw_all is not None:
     else:
         df_raw['CAISSE EQ'] = df_raw['LineQty']
 
-    # --- FILTRES SIDEBAR (RÉINTÉGRÉS) ---
+    # --- FILTRES SIDEBAR ---
     st.sidebar.divider()
-    start_ytd = date(2026, 1, 1)
-    if "date_range" not in st.session_state:
+    
+    # Déterminer la date de début selon la marque
+    start_ytd = date(2026, 1, 1) if page == "Alchimiste" else date(2025, 11, 1)
+    
+    if "date_range" not in st.session_state or st.session_state.get("last_page") != page:
         st.session_state["date_range"] = (start_ytd, date.today())
+        st.session_state["last_page"] = page
+
     if st.sidebar.button("🔄 Reset YTD"):
         st.session_state["date_range"] = (start_ytd, date.today())
+
     date_sel = st.sidebar.date_input("Analyse détaillée (Graphs)", value=st.session_state["date_range"], key="date_range")
 
+    # --- FILTRE AVEC .copy() POUR ÉVITER SettingWithCopyWarning ---
     df_filtered = df_raw.copy()
     if isinstance(date_sel, tuple) and len(date_sel) == 2:
-        df_filtered = df_raw[(df_raw['DateAnalyse'].dt.date >= date_sel[0]) & (df_raw['DateAnalyse'].dt.date <= date_sel[1])]
+        mask = (
+            (df_raw['DateAnalyse'].dt.date >= date_sel[0]) &
+            (df_raw['DateAnalyse'].dt.date <= date_sel[1])
+        )
+        df_filtered = df_raw[mask].copy()  # ← correctif critique
+
+    if df_filtered.empty:
+        st.warning(f"⚠️ Aucune donnée trouvée pour la période sélectionnée ({date_sel[0]} → {date_sel[1]}). Vérifiez que des données existent pour cette plage.")
 
     # --- KPI COMPARATIFS YTD ---
     df_2026_full = df_raw[df_raw['Année'] == 2026]
@@ -131,7 +145,7 @@ if df_raw_all is not None:
         st.subheader("📦 Volume (Eq. 12)")
         v1, v2 = st.columns(2)
         v1.metric("2026 YTD", f"{df_2026_full['CAISSE EQ'].sum():,.0f}")
-        v2.metric("2025 YTD", f"{df_2025_ytd['CAISSE EQ'].sum():,.0f}", delta=f"{df_2026_full['CAISSE EQ'].sum() - df_2025_ytd['CAISSE EQ'].sum():,.0f}")
+        v2.metric("2025 YTY", f"{df_2025_ytd['CAISSE EQ'].sum():,.0f}", delta=f"{df_2026_full['CAISSE EQ'].sum() - df_2025_ytd['CAISSE EQ'].sum():,.0f}")
     with c2:
         st.subheader("💰 Ventes ($)")
         s1, s2 = st.columns(2)
@@ -142,15 +156,12 @@ if df_raw_all is not None:
     st.divider()
     st.header("📊 Ventes de la dernière semaine")
     
-    # Identifier la dernière semaine dans les données 2026
     df_2026 = df_raw[df_raw['Année'] == 2026].copy()
     
     if not df_2026.empty:
-        # Trouver la dernière semaine
         derniere_semaine = df_2026['Semaine'].max()
         df_derniere_semaine = df_2026[df_2026['Semaine'] == derniere_semaine]
         
-        # Agréger par SKU
         ventes_semaine = df_derniere_semaine.groupby('ItemName').agg({
             'CAISSE EQ': 'sum',
             'LineTotal': 'sum'
@@ -162,14 +173,11 @@ if df_raw_all is not None:
             'LineTotal': 'Ventes ($)'
         })
         
-        # Trier par ventes en dollars décroissant
         ventes_semaine = ventes_semaine.sort_values('Ventes ($)', ascending=False)
         
-        # Calculer les totaux
         total_caisses = ventes_semaine['Caisses'].sum()
         total_dollars = ventes_semaine['Ventes ($)'].sum()
         
-        # Afficher les métriques de totaux
         col1, col2, col3 = st.columns([2, 1, 1])
         with col1:
             st.metric("Semaine", f"#{int(derniere_semaine)} - 2026")
@@ -178,7 +186,6 @@ if df_raw_all is not None:
         with col3:
             st.metric("Total Ventes", f"{total_dollars:,.2f} $")
         
-        # Afficher le tableau avec formatage
         st.dataframe(
             ventes_semaine.style.format({
                 'Caisses': '{:.2f}',
@@ -227,7 +234,6 @@ if df_raw_all is not None:
     with col_left:
         st.header("🏢 Top Bannières")
         if 'GroupName' in df_filtered.columns:
-            # Créer une colonne ajustée qui sépare les SUPER C
             df_filtered['GroupName_Adjusted'] = df_filtered.apply(
                 lambda row: 'SUPER C' if 'SUPER C' in str(row['CardName']).upper() else row['GroupName'], 
                 axis=1
