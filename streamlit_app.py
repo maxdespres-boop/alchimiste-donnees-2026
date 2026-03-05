@@ -55,6 +55,23 @@ def harmoniser_formats_alc(row):
             return pd.Series([qty * 2, code])
         return pd.Series([qty, code])
 
+# --- CORRECTION SKU SANS ALCOOL (BLONDE vs BLANCHE) ---
+def corriger_sku_sans_alcool(row):
+    """Distingue BLONDE SANS ALCOOL (MABLONSA12) et BLANCHE SANS ALCOOL (MABLANSA12)
+    qui partagent le même ItemName dans les fichiers source."""
+    code = str(row['ItemCode']).strip().upper()
+    name = str(row['ItemName']).strip()
+    if 'SANS ALCOOL' not in name.upper():
+        return name
+    if code == 'MABLONSA12':
+        # Remplace toute variante de "SANS ALCOOL B" ou "SANS ALCOOL" par BLONDE SANS ALCOOL
+        import re
+        return re.sub(r'SANS ALCOOL\s*B?', 'BLONDE SANS ALCOOL', name, flags=re.IGNORECASE).strip()
+    elif code == 'MABLANSA12':
+        import re
+        return re.sub(r'SANS ALCOOL\s*B?', 'BLANCHE SANS ALCOOL', name, flags=re.IGNORECASE).strip()
+    return name
+
 # --- EXCEL PRO ---
 def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_banner):
     output = io.BytesIO()
@@ -106,6 +123,12 @@ if df_raw_all is not None:
         df_raw[['CAISSE EQ', 'SKU_BASE']] = df_raw.apply(harmoniser_formats_alc, axis=1)
     else:
         df_raw['CAISSE EQ'] = df_raw['LineQty']
+
+    # --- CORRECTION SKU SANS ALCOOL (BLONDE vs BLANCHE) ---
+    # MABLONSA12 = BLONDE SANS ALCOOL / MABLANSA12 = BLANCHE SANS ALCOOL
+    # Les deux partagent le même ItemName dans les fichiers source, on les distingue via ItemCode
+    if 'ItemCode' in df_raw.columns and 'ItemName' in df_raw.columns:
+        df_raw['ItemName'] = df_raw.apply(corriger_sku_sans_alcool, axis=1)
 
     # --- FILTRES SIDEBAR ---
     st.sidebar.divider()
