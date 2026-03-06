@@ -44,14 +44,33 @@ def load_data_from_drive(folder_id):
             continue
     return pd.concat(df_list, ignore_index=True) if df_list else None
 
+# --- LISTE EXPLICITE DES CODES 4-PACK À DOUBLER ---
+# Ces SKUs sont vendus en 4-packs et doivent être multipliés par 2
+# pour obtenir l'équivalent caisse de 12 (3 x 4-packs = 1 caisse de 12)
+CODES_4PACK = {
+    'MABLON4P',
+    'MAIPA4',
+    'MAECOSS4',
+    'MAROUSS4',
+    'MABLONSG4P',
+    'MABLANSG4P',
+    'MABLONSGSA4P',
+    'MAIPADG4P',
+    'MAROUSG4P',
+}
+
 # --- LOGIQUE DE CONVERSION ---
 def harmoniser_formats_alc(row):
     code = str(row['ItemCode']).strip().upper()
     qty = row['LineQty']
     if row['Année'] == 2025:
+        # En 2025, on double uniquement les 4-packs connus explicitement
+        if code in CODES_4PACK:
+            return pd.Series([qty * 2, code])
         return pd.Series([qty, code])
     else:
-        if code.endswith('SG4P') or (not code.endswith('12')):
+        # En 2026, on double les 4-packs (SG4P ou tout code ne finissant pas par '12')
+        if code.endswith('SG4P') or code in CODES_4PACK or (not code.endswith('12')):
             return pd.Series([qty * 2, code])
         return pd.Series([qty, code])
 
