@@ -150,25 +150,36 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         workbook = writer.book
         fmt_money = workbook.add_format({'num_format': '#,##0.00 $'})
-        fmt_qty = workbook.add_format({'num_format': '#,##0'})
-        fmt_perc = workbook.add_format({'num_format': '0.0%'})
-        
-        def save_sheet(df, name, is_money=False, add_row_total=True):
+        fmt_qty   = workbook.add_format({'num_format': '#,##0'})
+        fmt_perc  = workbook.add_format({'num_format': '0.0%'})
+        fmt_text  = workbook.add_format({'bold': False})
+
+        def save_sheet(df, name, is_money=False, add_row_total=True, with_gamme=False):
             df_t = df.copy()
+            # Injecter colonne Gamme en 1ère position (avant les données)
+            if with_gamme:
+                df_t.insert(0, 'Gamme', df_t.index.map(get_gamme))
             if add_row_total:
                 df_t.loc['TOTAL GLOBAL'] = df_t.sum(numeric_only=True)
             df_t.to_excel(writer, sheet_name=name)
             ws = writer.sheets[name]
+            ws.set_column(0, 0, 42)  # colonne index (ItemName)
             for i, col in enumerate(df_t.columns):
-                f = fmt_perc if "Variation %" in str(col) else (fmt_money if is_money else fmt_qty)
-                ws.set_column(i+1, i+1, 20, f)
-            ws.set_column(0, 0, 40)
+                excel_col = i + 1
+                if col == 'Gamme':
+                    ws.set_column(excel_col, excel_col, 18, fmt_text)
+                else:
+                    f = fmt_perc if 'Variation %' in str(col) else (fmt_money if is_money else fmt_qty)
+                    ws.set_column(excel_col, excel_col, 20, f)
 
-        save_sheet(df_week_comp, 'Comparaison Semaine', add_row_total=True)
-        save_sheet(pivot_vol, 'Vol Mensuel YOY', add_row_total=False)
-        save_sheet(pivot_val, 'Dollars Mensuels YOY', is_money=True, add_row_total=False)
-        save_sheet(pivot_sku, 'Détail SKU 2026', add_row_total=True)
-        save_sheet(pivot_banner, 'Bannières 2026', add_row_total=True)
+        # Onglets SKU — colonne Gamme ajoutée
+        save_sheet(df_week_comp, 'Comparaison Semaine', add_row_total=True,  with_gamme=True)
+        save_sheet(pivot_sku,    'Détail SKU 2026',     add_row_total=True,  with_gamme=True)
+        # Onglets mensuels — index = Mois_Nom, pas de Gamme
+        save_sheet(pivot_vol,    'Vol Mensuel YOY',     add_row_total=False, with_gamme=False)
+        save_sheet(pivot_val,    'Dollars Mensuels YOY',is_money=True, add_row_total=False, with_gamme=False)
+        # Bannières — index = GroupName, pas de Gamme
+        save_sheet(pivot_banner, 'Bannières 2026',      add_row_total=True,  with_gamme=False)
     return output.getvalue()
 
 # --- MAIN APP ---
