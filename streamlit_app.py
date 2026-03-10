@@ -57,90 +57,64 @@ CODES_4PACK = {
     'MAROUSG4P',
 }
 
-# --- MAPPING GAMMES PAR ItemName ---
-GAMME_MAP = {
-    # 4 PACK
-    '** 4 PACK ** BLONDE4pack':         '4 Pack',
-    '** 4 PACK ** ECOSSAISE4pack':      '4 Pack',
-    '** 4 PACK ** IPA4pack':            '4 Pack',
-    '** 4 PACK ** ROUSSE4pack':         '4 Pack',
-    # Authentique
-    '**CAISSE DE 12 ** BOCK DE JOLIAuthentique':        'Authentique',
-    '**CAISSE DE 12** BLONDEAuthentique':               'Authentique',
-    '**CAISSE DE 12** DRY STOUTAuthentique':            'Authentique',
-    '**CAISSE DE 12** ECOSSAISEAuthentique':            'Authentique',
-    '**CAISSE DE 12** IPAAuthentique':                  'Authentique',
-    '**CAISSE DE 12** LA BITTERAuthentique':            'Authentique',
-    '**CAISSE DE 12** LA BLANCHE CLAuthentique':        'Authentique',
-    '**CAISSE DE 12** LA GOSEAuthentique':              'Authentique',
-    '**CAISSE DE 12** LA ROUSSEAuthentique':            'Authentique',
-    '**CAISSE DE 12** PALE ALEAuthentique':             'Authentique',
-    'BLONDEAuthentique':                'Authentique',
-    'BOCK DE JOLIETTEAuthentique':      'Authentique',
-    'DRY STOUTAuthentique':             'Authentique',
-    'ECOSSAISEAuthentique':             'Authentique',
-    'IPAAuthentique':                   'Authentique',
-    'LA BITTERAuthentique':             'Authentique',
-    'LA BLANCHE CLÉMENTINEAuthentique': 'Authentique',
-    'LA GOSEAuthentique':               'Authentique',
-    'LA ROUSSEAuthentique':             'Authentique',
-    'PALE ALEAuthentique':              'Authentique',
-    # Autre
-    '**4 PACK** PROJET TROPICALAutre':  'Autre',
-    'BLONDE CLASSIQUEAutre':            'Autre',
-    'CABANAAutre':                      'Autre',
-    'IPA SESSION TROPICALEAutre':       'Autre',
-    'MANGUE SUREAutre':                 'Autre',
-    'PLUMEAutre':                       'Autre',
-    'PÊCHE SUREAutre':                  'Autre',
-    'SURE FRAMBOISEAutre':              'Autre',
-    'TOKYO IPAAutre':                   'Autre',
-    # Quatuor
-    '** CS DE 12 ** QUATUORQuatuor':    'Quatuor',
+# --- MAPPING GAMMES PAR MOTS-CLÉS (ordre important : du plus spécifique au plus général) ---
+# Chaque entrée : (sous-chaîne à chercher dans ItemName en majuscules, gamme assignée)
+# L'ordre est crucial : Sans Gluten et Sans Alcool avant les autres pour éviter les faux positifs.
+GAMME_RULES = [
+    # Sans Gluten (priorité max — contient souvent "SANS ALCOOL" aussi)
+    ('SANS GLUTEN',         'Sans Gluten'),
     # Sans Alcool
-    '**CAISSE DE 12** BLANCHE SANS ALCOOLSans Alcool':  'Sans Alcool',
-    '**CAISSE DE 12** BLONDE SANS ALCOOLSans Alcool':   'Sans Alcool',
-    '**CAISSE DE 12** SANS ALCOOL ESans Alcool':        'Sans Alcool',
-    '**CAISSE DE 12** SANS ALCOOL GSans Alcool':        'Sans Alcool',
-    '**CAISSE DE 12** SANS ALCOOL ISans Alcool':        'Sans Alcool',
-    '**CAISSE DE 12** SANS ALCOOL SSans Alcool':        'Sans Alcool',
-    'SANS ALCOOL BLANCHESans Alcool':   'Sans Alcool',
-    'SANS ALCOOL BLONDESans Alcool':    'Sans Alcool',
-    'SANS ALCOOL ECOSSAISESans Alcool': 'Sans Alcool',
-    'SANS ALCOOL GOSESans Alcool':      'Sans Alcool',
-    'SANS ALCOOL IPASans Alcool':       'Sans Alcool',
-    'SANS ALCOOL SURE FRAMBOISESans Alcool': 'Sans Alcool',
-    # Sans Gluten
-    '**SANS GLUTEN & SANS ALCOOL **Sans Gluten':        'Sans Gluten',
-    '**SANS GLUTEN ** 4 PACK ** BLASans Gluten':        'Sans Gluten',
-    '**SANS GLUTEN ** 4 PACK ** BLOSans Gluten':        'Sans Gluten',
-    '**SANS GLUTEN ** 4 PACK ** IPASans Gluten':        'Sans Gluten',
-    '**SANS GLUTEN ** 4 PACK ** ROUSans Gluten':        'Sans Gluten',
-    # Vilains
-    '**CAISSE DE 12** BLANCHE PILONVilains':            'Vilains',
-    '**CAISSE DE 12** CALIFORNIA STVilains':            'Vilains',
-    '**CAISSE DE 12** FLEURVilains':                    'Vilains',
-    '**CAISSE DE 12** FORÊTVilains':                    'Vilains',
-    '**CAISSE DE 12** PARASOLVilains':                  'Vilains',
-    '**CAISSE DE 12** PROJET TROPICVilains':            'Vilains',
-    '**CAISSE DE 12** YUKONVilains':                    'Vilains',
-    'ARIZONA MONUMENT PILSNERVilains':  'Vilains',
-    'BIG SURFVilains':                  'Vilains',
-    'BLANCHE PILONVilains':             'Vilains',
-    'CALIFORNIA STYLE IPAVilains':      'Vilains',
-    'FLEURVilains':                     'Vilains',
-    'FORÊTVilains':                     'Vilains',
-    'PARASOLVilains':                   'Vilains',
-    'PROJET TROPICALVilains':           'Vilains',
-    'YUKONVilains':                     'Vilains',
-}
-
-TOUTES_GAMMES = sorted(set(GAMME_MAP.values()))
+    ('SANS ALCOOL',         'Sans Alcool'),
+    # 4 Pack (standalone, pas Vilains ni Authentique)
+    ('4 PACK',              '4 Pack'),
+    # Quatuor
+    ('QUATUOR',             'Quatuor'),
+    # Vilains — noms de produits spécifiques à cette gamme
+    ('PILON',               'Vilains'),
+    ('CALIFORNIA',          'Vilains'),
+    ('FLEUR',               'Vilains'),
+    ('FORÊT',               'Vilains'),
+    ('FORET',               'Vilains'),
+    ('PARASOL',             'Vilains'),
+    ('YUKON',               'Vilains'),
+    ('ARIZONA',             'Vilains'),
+    ('BIG SURF',            'Vilains'),
+    # Autre — produits spéciaux/saisonniers
+    ('BLONDE CLASSIQUE',    'Autre'),
+    ('CABANA',              'Autre'),
+    ('IPA SESSION',         'Autre'),
+    ('MANGUE',              'Autre'),
+    ('PLUME',               'Autre'),
+    ('PÊCHE',               'Autre'),
+    ('PECHE',               'Autre'),
+    ('TOKYO',               'Autre'),
+    # Projet Tropical : Autre si 4 pack (règle 4 PACK déjà capturée plus haut),
+    # Vilains si caisse de 12 — on arrive ici seulement si "4 PACK" n'a pas matché
+    ('PROJET TROPIC',       'Vilains'),
+    ('PROJET TROPICAL',     'Vilains'),
+    # Authentique — tout le reste de la gamme principale
+    ('BOCK',                'Authentique'),
+    ('BLONDE',              'Authentique'),
+    ('DRY STOUT',           'Authentique'),
+    ('ECOSSAISE',           'Authentique'),
+    ('ÉCOSSAISE',           'Authentique'),
+    ('IPA',                 'Authentique'),
+    ('BITTER',              'Authentique'),
+    ('BLANCHE',             'Authentique'),
+    ('GOSE',                'Authentique'),
+    ('ROUSSE',              'Authentique'),
+    ('PALE ALE',            'Authentique'),
+    ('SURE FRAMBOISE',      'Authentique'),
+]
 
 
 def get_gamme(item_name):
-    """Retourne la gamme d'un ItemName, ou 'Autre' si non trouvé."""
-    return GAMME_MAP.get(str(item_name).strip(), 'Non classé')
+    """Retourne la gamme d'un ItemName via correspondance par mots-clés."""
+    name_up = str(item_name).strip().upper()
+    for keyword, gamme in GAMME_RULES:
+        if keyword.upper() in name_up:
+            return gamme
+    return 'Non classé'
 
 
 # --- LOGIQUE DE CONVERSION ---
