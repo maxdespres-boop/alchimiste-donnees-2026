@@ -45,8 +45,6 @@ def load_data_from_drive(folder_id):
     return pd.concat(df_list, ignore_index=True) if df_list else None
 
 # --- LISTE EXPLICITE DES CODES 4-PACK À DOUBLER ---
-# Ces SKUs sont vendus en 4-packs et doivent être multipliés par 2
-# pour obtenir l'équivalent caisse de 12 (3 x 4-packs = 1 caisse de 12)
 CODES_4PACK = {
     'MABLON4P',
     'MAIPA4',
@@ -59,31 +57,112 @@ CODES_4PACK = {
     'MAROUSG4P',
 }
 
+# --- MAPPING GAMMES PAR ItemName ---
+GAMME_MAP = {
+    # 4 PACK
+    '** 4 PACK ** BLONDE4pack':         '4 Pack',
+    '** 4 PACK ** ECOSSAISE4pack':      '4 Pack',
+    '** 4 PACK ** IPA4pack':            '4 Pack',
+    '** 4 PACK ** ROUSSE4pack':         '4 Pack',
+    # Authentique
+    '**CAISSE DE 12 ** BOCK DE JOLIAuthentique':        'Authentique',
+    '**CAISSE DE 12** BLONDEAuthentique':               'Authentique',
+    '**CAISSE DE 12** DRY STOUTAuthentique':            'Authentique',
+    '**CAISSE DE 12** ECOSSAISEAuthentique':            'Authentique',
+    '**CAISSE DE 12** IPAAuthentique':                  'Authentique',
+    '**CAISSE DE 12** LA BITTERAuthentique':            'Authentique',
+    '**CAISSE DE 12** LA BLANCHE CLAuthentique':        'Authentique',
+    '**CAISSE DE 12** LA GOSEAuthentique':              'Authentique',
+    '**CAISSE DE 12** LA ROUSSEAuthentique':            'Authentique',
+    '**CAISSE DE 12** PALE ALEAuthentique':             'Authentique',
+    'BLONDEAuthentique':                'Authentique',
+    'BOCK DE JOLIETTEAuthentique':      'Authentique',
+    'DRY STOUTAuthentique':             'Authentique',
+    'ECOSSAISEAuthentique':             'Authentique',
+    'IPAAuthentique':                   'Authentique',
+    'LA BITTERAuthentique':             'Authentique',
+    'LA BLANCHE CLÉMENTINEAuthentique': 'Authentique',
+    'LA GOSEAuthentique':               'Authentique',
+    'LA ROUSSEAuthentique':             'Authentique',
+    'PALE ALEAuthentique':              'Authentique',
+    # Autre
+    '**4 PACK** PROJET TROPICALAutre':  'Autre',
+    'BLONDE CLASSIQUEAutre':            'Autre',
+    'CABANAAutre':                      'Autre',
+    'IPA SESSION TROPICALEAutre':       'Autre',
+    'MANGUE SUREAutre':                 'Autre',
+    'PLUMEAutre':                       'Autre',
+    'PÊCHE SUREAutre':                  'Autre',
+    'SURE FRAMBOISEAutre':              'Autre',
+    'TOKYO IPAAutre':                   'Autre',
+    # Quatuor
+    '** CS DE 12 ** QUATUORQuatuor':    'Quatuor',
+    # Sans Alcool
+    '**CAISSE DE 12** BLANCHE SANS ALCOOLSans Alcool':  'Sans Alcool',
+    '**CAISSE DE 12** BLONDE SANS ALCOOLSans Alcool':   'Sans Alcool',
+    '**CAISSE DE 12** SANS ALCOOL ESans Alcool':        'Sans Alcool',
+    '**CAISSE DE 12** SANS ALCOOL GSans Alcool':        'Sans Alcool',
+    '**CAISSE DE 12** SANS ALCOOL ISans Alcool':        'Sans Alcool',
+    '**CAISSE DE 12** SANS ALCOOL SSans Alcool':        'Sans Alcool',
+    'SANS ALCOOL BLANCHESans Alcool':   'Sans Alcool',
+    'SANS ALCOOL BLONDESans Alcool':    'Sans Alcool',
+    'SANS ALCOOL ECOSSAISESans Alcool': 'Sans Alcool',
+    'SANS ALCOOL GOSESans Alcool':      'Sans Alcool',
+    'SANS ALCOOL IPASans Alcool':       'Sans Alcool',
+    'SANS ALCOOL SURE FRAMBOISESans Alcool': 'Sans Alcool',
+    # Sans Gluten
+    '**SANS GLUTEN & SANS ALCOOL **Sans Gluten':        'Sans Gluten',
+    '**SANS GLUTEN ** 4 PACK ** BLASans Gluten':        'Sans Gluten',
+    '**SANS GLUTEN ** 4 PACK ** BLOSans Gluten':        'Sans Gluten',
+    '**SANS GLUTEN ** 4 PACK ** IPASans Gluten':        'Sans Gluten',
+    '**SANS GLUTEN ** 4 PACK ** ROUSans Gluten':        'Sans Gluten',
+    # Vilains
+    '**CAISSE DE 12** BLANCHE PILONVilains':            'Vilains',
+    '**CAISSE DE 12** CALIFORNIA STVilains':            'Vilains',
+    '**CAISSE DE 12** FLEURVilains':                    'Vilains',
+    '**CAISSE DE 12** FORÊTVilains':                    'Vilains',
+    '**CAISSE DE 12** PARASOLVilains':                  'Vilains',
+    '**CAISSE DE 12** PROJET TROPICVilains':            'Vilains',
+    '**CAISSE DE 12** YUKONVilains':                    'Vilains',
+    'ARIZONA MONUMENT PILSNERVilains':  'Vilains',
+    'BIG SURFVilains':                  'Vilains',
+    'BLANCHE PILONVilains':             'Vilains',
+    'CALIFORNIA STYLE IPAVilains':      'Vilains',
+    'FLEURVilains':                     'Vilains',
+    'FORÊTVilains':                     'Vilains',
+    'PARASOLVilains':                   'Vilains',
+    'PROJET TROPICALVilains':           'Vilains',
+    'YUKONVilains':                     'Vilains',
+}
+
+TOUTES_GAMMES = sorted(set(GAMME_MAP.values()))
+
+
+def get_gamme(item_name):
+    """Retourne la gamme d'un ItemName, ou 'Autre' si non trouvé."""
+    return GAMME_MAP.get(str(item_name).strip(), 'Non classé')
+
+
 # --- LOGIQUE DE CONVERSION ---
 def harmoniser_formats_alc(row):
     code = str(row['ItemCode']).strip().upper()
     qty = row['LineQty']
     if row['Année'] == 2025:
-        # En 2025, on double uniquement les 4-packs connus explicitement
         if code in CODES_4PACK:
             return pd.Series([qty * 2, code])
         return pd.Series([qty, code])
     else:
-        # En 2026, on double les 4-packs (SG4P ou tout code ne finissant pas par '12')
         if code.endswith('SG4P') or code in CODES_4PACK or (not code.endswith('12')):
             return pd.Series([qty * 2, code])
         return pd.Series([qty, code])
 
 # --- CORRECTION SKU SANS ALCOOL (BLONDE vs BLANCHE) ---
 def corriger_sku_sans_alcool(row):
-    """Distingue BLONDE SANS ALCOOL (MABLONSA12) et BLANCHE SANS ALCOOL (MABLANSA12)
-    qui partagent le même ItemName dans les fichiers source."""
     code = str(row['ItemCode']).strip().upper()
     name = str(row['ItemName']).strip()
     if 'SANS ALCOOL' not in name.upper():
         return name
     if code == 'MABLONSA12':
-        # Remplace toute variante de "SANS ALCOOL B" ou "SANS ALCOOL" par BLONDE SANS ALCOOL
         import re
         return re.sub(r'SANS ALCOOL\s*B?', 'BLONDE SANS ALCOOL', name, flags=re.IGNORECASE).strip()
     elif code == 'MABLANSA12':
@@ -143,16 +222,16 @@ if df_raw_all is not None:
     else:
         df_raw['CAISSE EQ'] = df_raw['LineQty']
 
-    # --- CORRECTION SKU SANS ALCOOL (BLONDE vs BLANCHE) ---
-    # MABLONSA12 = BLONDE SANS ALCOOL / MABLANSA12 = BLANCHE SANS ALCOOL
-    # Les deux partagent le même ItemName dans les fichiers source, on les distingue via ItemCode
+    # --- CORRECTION SKU SANS ALCOOL ---
     if 'ItemCode' in df_raw.columns and 'ItemName' in df_raw.columns:
         df_raw['ItemName'] = df_raw.apply(corriger_sku_sans_alcool, axis=1)
+
+    # --- AJOUT COLONNE GAMME ---
+    df_raw['Gamme'] = df_raw['ItemName'].apply(get_gamme)
 
     # --- FILTRES SIDEBAR ---
     st.sidebar.divider()
     
-    # Déterminer la date de début selon la marque
     start_ytd = date(2026, 1, 1) if page == "Alchimiste" else date(2025, 11, 1)
     
     if "date_range" not in st.session_state or st.session_state.get("last_page") != page:
@@ -164,14 +243,14 @@ if df_raw_all is not None:
 
     date_sel = st.sidebar.date_input("Analyse détaillée (Graphs)", value=st.session_state["date_range"], key="date_range")
 
-    # --- FILTRE AVEC .copy() POUR ÉVITER SettingWithCopyWarning ---
+    # --- FILTRE DATE ---
     df_filtered = df_raw.copy()
     if isinstance(date_sel, tuple) and len(date_sel) == 2:
         mask = (
             (df_raw['DateAnalyse'].dt.date >= date_sel[0]) &
             (df_raw['DateAnalyse'].dt.date <= date_sel[1])
         )
-        df_filtered = df_raw[mask].copy()  # ← correctif critique
+        df_filtered = df_raw[mask].copy()
 
     if df_filtered.empty:
         st.warning(f"⚠️ Aucune donnée trouvée pour la période sélectionnée ({date_sel[0]} → {date_sel[1]}). Vérifiez que des données existent pour cette plage.")
@@ -203,7 +282,24 @@ if df_raw_all is not None:
     if not df_2026.empty:
         derniere_semaine = df_2026['Semaine'].max()
         df_derniere_semaine = df_2026[df_2026['Semaine'] == derniere_semaine]
-        
+
+        # --- FILTRE GAMME : SEMAINE ---
+        gammes_disponibles_sem = sorted(df_derniere_semaine['Gamme'].unique().tolist())
+        options_sem = ['Toutes les gammes'] + gammes_disponibles_sem
+        col_titre_sem, col_filtre_sem = st.columns([3, 2])
+        with col_titre_sem:
+            st.subheader(f"Semaine #{int(derniere_semaine)} — 2026")
+        with col_filtre_sem:
+            gamme_sel_sem = st.selectbox(
+                "Filtrer par gamme",
+                options=options_sem,
+                index=0,
+                key="filtre_gamme_semaine"
+            )
+
+        if gamme_sel_sem != 'Toutes les gammes':
+            df_derniere_semaine = df_derniere_semaine[df_derniere_semaine['Gamme'] == gamme_sel_sem]
+
         ventes_semaine = df_derniere_semaine.groupby('ItemName').agg({
             'CAISSE EQ': 'sum',
             'LineTotal': 'sum'
@@ -214,7 +310,6 @@ if df_raw_all is not None:
             'CAISSE EQ': 'Caisses',
             'LineTotal': 'Ventes ($)'
         })
-        
         ventes_semaine = ventes_semaine.sort_values('Ventes ($)', ascending=False)
         
         total_caisses = ventes_semaine['Caisses'].sum()
@@ -222,7 +317,8 @@ if df_raw_all is not None:
         
         col1, col2, col3 = st.columns([2, 1, 1])
         with col1:
-            st.metric("Semaine", f"#{int(derniere_semaine)} - 2026")
+            gamme_label = f" — {gamme_sel_sem}" if gamme_sel_sem != 'Toutes les gammes' else ""
+            st.metric("Gamme", gamme_label if gamme_label else "Toutes")
         with col2:
             st.metric("Total Caisses", f"{total_caisses:,.0f}")
         with col3:
@@ -252,7 +348,7 @@ if df_raw_all is not None:
         st.plotly_chart(px.line(pivot_val.reset_index(), x='Mois_Nom', y=pivot_val.columns, markers=True), use_container_width=True)
         st.dataframe(pivot_val.style.format("{:,.2f} $"), use_container_width=True)
 
-    # --- LOGIQUE EXPORT EXCEL (AVEC WoW) ---
+    # --- LOGIQUE EXPORT EXCEL ---
     current_week = df_2026_full['Semaine'].max() if not df_2026_full.empty else 1
     df_w_2026 = df_2026_full[df_2026_full['Semaine'] == current_week]
     df_w_2025 = df_raw[(df_raw['Année'] == 2025) & (df_raw['Semaine'] == current_week)]
@@ -290,11 +386,40 @@ if df_raw_all is not None:
     # --- COMPARISON SKU YOY (BAS DE PAGE) ---
     st.divider()
     st.header("📦 Comparaison par SKU (YTD)")
-    sku_2026_ytd = df_2026_full.groupby('ItemName')['CAISSE EQ'].sum()
-    sku_2025_ytd_val = df_2025_ytd.groupby('ItemName')['CAISSE EQ'].sum()
+
+    # --- FILTRE GAMME : YTD ---
+    gammes_disponibles_ytd = sorted(
+        set(df_2026_full['Gamme'].unique().tolist() + df_2025_ytd['Gamme'].unique().tolist())
+    )
+    options_ytd = ['Toutes les gammes'] + gammes_disponibles_ytd
+    col_titre_ytd, col_filtre_ytd = st.columns([3, 2])
+    with col_titre_ytd:
+        st.subheader("Comparaison YTD 2025 vs 2026")
+    with col_filtre_ytd:
+        gamme_sel_ytd = st.selectbox(
+            "Filtrer par gamme",
+            options=options_ytd,
+            index=0,
+            key="filtre_gamme_ytd"
+        )
+
+    df_2026_ytd_filtered = df_2026_full.copy()
+    df_2025_ytd_filtered = df_2025_ytd.copy()
+
+    if gamme_sel_ytd != 'Toutes les gammes':
+        df_2026_ytd_filtered = df_2026_ytd_filtered[df_2026_ytd_filtered['Gamme'] == gamme_sel_ytd]
+        df_2025_ytd_filtered = df_2025_ytd_filtered[df_2025_ytd_filtered['Gamme'] == gamme_sel_ytd]
+
+    sku_2026_ytd = df_2026_ytd_filtered.groupby('ItemName')['CAISSE EQ'].sum()
+    sku_2025_ytd_val = df_2025_ytd_filtered.groupby('ItemName')['CAISSE EQ'].sum()
     sku_yoy = pd.DataFrame({'2025 (YTD)': sku_2025_ytd_val, '2026 (YTD)': sku_2026_ytd}).fillna(0)
     sku_yoy['Variation'] = sku_yoy['2026 (YTD)'] - sku_yoy['2025 (YTD)']
-    st.dataframe(sku_yoy.sort_values('2026 (YTD)', ascending=False).style.format("{:.0f}").bar(subset=['Variation'], align='mid', color=['#ff9999', '#99ff99']), use_container_width=True)
+    st.dataframe(
+        sku_yoy.sort_values('2026 (YTD)', ascending=False)
+              .style.format("{:.0f}")
+              .bar(subset=['Variation'], align='mid', color=['#ff9999', '#99ff99']),
+        use_container_width=True
+    )
 
 else:
     st.error("Données introuvables. Vérifiez vos dossiers Drive.")
