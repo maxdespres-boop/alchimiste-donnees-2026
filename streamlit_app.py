@@ -482,3 +482,116 @@ st.dataframe(
     use_container_width=True,
     hide_index=True
 )
+
+# --- RÉPARTITION MENSUELLE 2025 (%) ---
+st.divider()
+st.header("📅 Saisonnalité 2025 — Répartition des ventes par mois")
+
+df_2025_full = df_raw[df_raw['Année'] == 2025].copy()
+
+if not df_2025_full.empty:
+
+    # --- Totaux mensuels globaux ---
+    mensuel_2025 = (
+        df_2025_full
+        .groupby('Mois_Nom', sort=True)
+        .agg(Caisses=('CAISSE EQ', 'sum'), Ventes=('LineTotal', 'sum'))
+        .reset_index()
+        .sort_values('Mois_Nom')          # tri alphanumérique = chronologique grâce au préfixe "01 -", "02 -"…
+    )
+    mensuel_2025['% Volume'] = mensuel_2025['Caisses'] / mensuel_2025['Caisses'].sum()
+    mensuel_2025['% Ventes'] = mensuel_2025['Ventes']  / mensuel_2025['Ventes'].sum()
+
+    # --- Totaux mensuels par gamme (pour stacked chart) ---
+    mensuel_gamme = (
+        df_2025_full
+        .groupby(['Mois_Nom', 'Gamme'], sort=True)
+        .agg(Caisses=('CAISSE EQ', 'sum'))
+        .reset_index()
+        .sort_values('Mois_Nom')
+    )
+    # % relatif au total mensuel toutes gammes
+    mensuel_gamme = mensuel_gamme.merge(
+        mensuel_2025[['Mois_Nom', 'Caisses']].rename(columns={'Caisses': 'Total_Mois'}),
+        on='Mois_Nom'
+    )
+    mensuel_gamme['% du mois'] = mensuel_gamme['Caisses'] / mensuel_gamme['Total_Mois']
+
+    # --- Tabs ---
+    tab_global, tab_gamme, tab_table = st.tabs([
+        "📊 Vue globale", "🍺 Par gamme (empilé)", "📋 Tableau complet"
+    ])
+
+    with tab_global:
+        col_v, col_d = st.columns(2)
+
+        with col_v:
+            fig_vol = px.bar(
+                mensuel_2025, x='Mois_Nom', y='% Volume',
+                text_auto='.1%',
+                labels={'Mois_Nom': 'Mois', '% Volume': '% du volume annuel'},
+                title="% Volume (caisses éq.) par mois — 2025",
+                color_discrete_sequence=['#636EFA']
+            )
+            fig_vol.update_traces(texttemplate='%{y:.1%}', textposition='outside')
+            fig_vol.update_layout(yaxis_tickformat='.0%', xaxis_tickangle=-35)
+            st.plotly_chart(fig_vol, use_container_width=True)
+
+        with col_d:
+            fig_val = px.bar(
+                mensuel_2025, x='Mois_Nom', y='% Ventes',
+                text_auto='.1%',
+                labels={'Mois_Nom': 'Mois', '% Ventes': '% du revenu annuel'},
+                title="% Revenu ($) par mois — 2025",
+                color_discrete_sequence=['#00CC96']
+            )
+            fig_val.update_traces(texttemplate='%{y:.1%}', textposition='outside')
+            fig_val.update_layout(yaxis_tickformat='.0%', xaxis_tickangle=-35)
+            st.plotly_chart(fig_val, use_container_width=True)
+
+    with tab_gamme:
+        st.caption("Chaque barre = 100 % du volume du mois. Les couleurs montrent la part de chaque gamme.")
+        fig_stack = px.bar(
+            mensuel_gamme,
+            x='Mois_Nom', y='% du mois', color='Gamme',
+            barmode='stack',
+            text_auto='.0%',
+            labels={'Mois_Nom': 'Mois', '% du mois': '% volume mensuel'},
+            title="Répartition par gamme au sein de chaque mois — 2025"
+        )
+        fig_stack.update_traces(texttemplate='%{y:.0%}', textposition='inside')
+        fig_stack.update_layout(yaxis_tickformat='.0%', xaxis_tickangle=-35)
+        st.plotly_chart(fig_stack, use_container_width=True)
+
+    with tab_table:
+        df_table_pct = mensuel_2025[[
+            'Mois_Nom', 'Caisses', '% Volume', 'Ventes', '% Ventes'
+        ]].rename(columns={
+            'Mois_Nom': 'Mois',
+            'Caisses':  'Caisses éq.',
+            'Ventes':   'Ventes ($)'
+        })
+
+        # Ligne total
+        total_row = pd.DataFrame([{
+            'Mois': 'TOTAL',
+            'Caisses éq.': df_table_pct['Caisses éq.'].sum(),
+            '% Volume':    df_table_pct['% Volume'].sum(),
+            'Ventes ($)':  df_table_pct['Ventes ($)'].sum(),
+            '% Ventes':    df_table_pct['% Ventes'].sum(),
+        }])
+        df_table_pct = pd.concat([df_table_pct, total_row], ignore_index=True)
+
+        st.dataframe(
+            df_table_pct.style.format({
+                'Caisses éq.': '{:,.0f}',
+                '% Volume':    '{:.1%}',
+                'Ventes ($)':  '{:,.2f} $',
+                '% Ventes':    '{:.1%}',
+            }).bar(subset=['% Volume', '% Ventes'], color='#d1e8ff'),
+            use_container_width=True,
+            hide_index=True
+        )
+
+else:
+    st.warning("Aucune donnée 2025 disponible.")
