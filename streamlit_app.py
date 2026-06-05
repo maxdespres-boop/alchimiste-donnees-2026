@@ -408,3 +408,77 @@ if df_raw_all is not None:
 
 else:
     st.error("Données introuvables. Vérifiez vos dossiers Drive.")
+
+# --- PRIX DE VENTE MOYEN PAR GAMME ---
+st.divider()
+st.header("💲 Prix de vente moyen par gamme")
+
+def calc_prix_gamme(df: pd.DataFrame) -> pd.DataFrame:
+    """Retourne le prix moyen par caisse équivalente, groupé par Gamme."""
+    df_p = df[df['CAISSE EQ'] > 0].copy()
+    return (
+        df_p.groupby('Gamme')
+        .apply(lambda g: g['LineTotal'].sum() / g['CAISSE EQ'].sum())
+        .reset_index(name='Prix / Caisse éq.')
+    )
+
+prix_2026 = calc_prix_gamme(df_2026_full)
+prix_2025 = calc_prix_gamme(df_2025_ytd)
+
+prix_compare = (
+    prix_2026
+    .merge(prix_2025, on='Gamme', suffixes=(' 2026', ' 2025'), how='outer')
+    .fillna(0)
+    .sort_values('Prix / Caisse éq. 2026', ascending=False)
+)
+prix_compare['Variation $'] = (
+    prix_compare['Prix / Caisse éq. 2026'] - prix_compare['Prix / Caisse éq. 2025']
+)
+prix_compare['Variation %'] = prix_compare['Variation $'] / (
+    prix_compare['Prix / Caisse éq. 2025'].replace(0, pd.NA)
+)
+
+# --- Graphique comparatif groupé ---
+df_chart_prix = prix_compare.melt(
+    id_vars='Gamme',
+    value_vars=['Prix / Caisse éq. 2025', 'Prix / Caisse éq. 2026'],
+    var_name='Année',
+    value_name='Prix ($/caisse éq.)'
+)
+# Masquer les gammes absentes d'une année (prix == 0)
+df_chart_prix = df_chart_prix[df_chart_prix['Prix ($/caisse éq.)'] > 0]
+
+fig_prix = px.bar(
+    df_chart_prix,
+    x='Gamme',
+    y='Prix ($/caisse éq.)',
+    color='Année',
+    barmode='group',
+    text_auto='.2f',
+    color_discrete_map={
+        'Prix / Caisse éq. 2025': '#636EFA',
+        'Prix / Caisse éq. 2026': '#00CC96'
+    },
+    title=f"Prix moyen par caisse équivalente (YTD — jusqu'au jour {int(max_day_2026)})"
+)
+fig_prix.update_traces(texttemplate='%{y:.2f} $', textposition='outside')
+fig_prix.update_layout(yaxis_ticksuffix=' $', uniformtext_minsize=9, uniformtext_mode='hide')
+st.plotly_chart(fig_prix, use_container_width=True)
+
+# --- Tableau détaillé avec variation ---
+st.dataframe(
+    prix_compare[
+        ['Gamme', 'Prix / Caisse éq. 2025', 'Prix / Caisse éq. 2026', 'Variation $', 'Variation %']
+    ].style.format({
+        'Prix / Caisse éq. 2025': '{:.2f} $',
+        'Prix / Caisse éq. 2026': '{:.2f} $',
+        'Variation $':            lambda v: f"{v:+.2f} $",
+        'Variation %':            lambda v: f"{v:+.1%}" if pd.notna(v) else 'N/A',
+    }).bar(
+        subset=['Variation $'],
+        align='mid',
+        color=['#ff9999', '#99ff99']
+    ),
+    use_container_width=True,
+    hide_index=True
+)
