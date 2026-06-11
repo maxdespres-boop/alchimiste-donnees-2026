@@ -595,3 +595,40 @@ if not df_2025_full.empty:
 
 else:
     st.warning("Aucune donnée 2025 disponible.")
+
+const getQuatuorJuneData = (data) => {
+  let total = 0;
+  data.forEach(row => {
+    const sku = row.ItemName;
+    const date = row.DateLivraison;
+    const qty = parseFloat(row.LineQty) || 0;
+    
+    if (sku === '** CS DE 12 ** QUATUOR' && date) {
+      const dateObj = new Date(date);
+      if (dateObj.getFullYear() === 2025 && dateObj.getMonth() === 5) { // juin = mois 5 (0-indexed)
+        total += qty;
+      }
+    }
+  });
+  return total;
+};
+
+const getQuatuorJuneDollarsData = (data) => {
+  let ventes = 0;
+  let rabais = 0;
+  data.forEach(row => {
+    const sku = row.ItemName;
+    const date = row.DateLivraison;
+    const dollars = parseFloat(row.LineTotal) || 0;
+    const rabaisVal = parseFloat(row.Rabais) || 0;
+    
+    if (sku === '** CS DE 12 ** QUATUOR' && date) {
+      const dateObj = new Date(date);
+      if (dateObj.getFullYear() === 2025 && dateObj.getMonth() === 5) {
+        ventes += dollars;
+        rabais += rabaisVal;
+      }
+    }
+  });
+  return { ventes, rabais };
+};
