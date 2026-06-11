@@ -596,39 +596,37 @@ if not df_2025_full.empty:
 else:
     st.warning("Aucune donnée 2025 disponible.")
 
-const getQuatuorJuneData = (data) => {
-  let total = 0;
-  data.forEach(row => {
-    const sku = row.ItemName;
-    const date = row.DateLivraison;
-    const qty = parseFloat(row.LineQty) || 0;
-    
-    if (sku === '** CS DE 12 ** QUATUOR' && date) {
-      const dateObj = new Date(date);
-      if (dateObj.getFullYear() === 2025 && dateObj.getMonth() === 5) { // juin = mois 5 (0-indexed)
-        total += qty;
-      }
-    }
-  });
-  return total;
-};
+def get_quatuor_june_data(data):
+    total = 0
+    for row in data:
+        sku = row.get('ItemName')
+        date = row.get('DateLivraison')
+        qty = float(row.get('LineQty', 0)) if row.get('LineQty') else 0
+        
+        if sku == '** CS DE 12 ** QUATUOR' and date:
+            try:
+                date_obj = pd.to_datetime(date)
+                if date_obj.year == 2025 and date_obj.month == 6:
+                    total += qty
+            except:
+                pass
+    return total
 
-const getQuatuorJuneDollarsData = (data) => {
-  let ventes = 0;
-  let rabais = 0;
-  data.forEach(row => {
-    const sku = row.ItemName;
-    const date = row.DateLivraison;
-    const dollars = parseFloat(row.LineTotal) || 0;
-    const rabaisVal = parseFloat(row.Rabais) || 0;
-    
-    if (sku === '** CS DE 12 ** QUATUOR' && date) {
-      const dateObj = new Date(date);
-      if (dateObj.getFullYear() === 2025 && dateObj.getMonth() === 5) {
-        ventes += dollars;
-        rabais += rabaisVal;
-      }
-    }
-  });
-  return { ventes, rabais };
-};
+def get_quatuor_june_dollars_data(data):
+    ventes = 0
+    rabais = 0
+    for row in data:
+        sku = row.get('ItemName')
+        date = row.get('DateLivraison')
+        dollars = float(row.get('LineTotal', 0)) if row.get('LineTotal') else 0
+        rabais_val = float(row.get('Rabais', 0)) if row.get('Rabais') else 0
+        
+        if sku == '** CS DE 12 ** QUATUOR' and date:
+            try:
+                date_obj = pd.to_datetime(date)
+                if date_obj.year == 2025 and date_obj.month == 6:
+                    ventes += dollars
+                    rabais += rabais_val
+            except:
+                pass
+    return {'ventes': ventes, 'rabais': rabais}
