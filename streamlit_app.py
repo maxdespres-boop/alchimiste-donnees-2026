@@ -596,37 +596,13 @@ if not df_2025_full.empty:
 else:
     st.warning("Aucune donnée 2025 disponible.")
 
-def get_quatuor_june_data(data):
-    total = 0
-    for row in data:
-        sku = row.get('ItemName')
-        date = row.get('DateLivraison')
-        qty = float(row.get('LineQty', 0)) if row.get('LineQty') else 0
-        
-        if sku == '** CS DE 12 ** QUATUOR' and date:
-            try:
-                date_obj = pd.to_datetime(date)
-                if date_obj.year == 2025 and date_obj.month == 6:
-                    total += qty
-            except:
-                pass
-    return total
+quatuor_june_2025 = get_quatuor_june_data(data)
+rows.append({'SKU': '** CS DE 12 ** QUATUOR - Juin 2025', 'Fabricant': '', 'Caisses': quatuor_june_2025})
 
-def get_quatuor_june_dollars_data(data):
-    ventes = 0
-    rabais = 0
-    for row in data:
-        sku = row.get('ItemName')
-        date = row.get('DateLivraison')
-        dollars = float(row.get('LineTotal', 0)) if row.get('LineTotal') else 0
-        rabais_val = float(row.get('Rabais', 0)) if row.get('Rabais') else 0
-        
-        if sku == '** CS DE 12 ** QUATUOR' and date:
-            try:
-                date_obj = pd.to_datetime(date)
-                if date_obj.year == 2025 and date_obj.month == 6:
-                    ventes += dollars
-                    rabais += rabais_val
-            except:
-                pass
-    return {'ventes': ventes, 'rabais': rabais}
+quatuor_june_2025_data = get_quatuor_june_dollars_data(data)
+rows.append({
+    'SKU': '** CS DE 12 ** QUATUOR - Juin 2025', 
+    'Fabricant': '', 
+    'Ventes ($)': quatuor_june_2025_data['ventes'],
+    'Rabais ($)': quatuor_june_2025_data['rabais']
+})
