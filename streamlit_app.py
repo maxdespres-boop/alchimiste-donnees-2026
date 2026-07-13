@@ -372,6 +372,79 @@ def corriger_sku_sans_alcool(row):
         return re.sub(r'SANS ALCOOL\s*B?', 'BLANCHE SANS ALCOOL', name, flags=re.IGNORECASE).strip()
     return name
 
+# --- AFFICHAGE D'UNE SECTION DÉDIÉE À UN CANAL (CAD / CSP / Keg Access) ---
+def render_section_canal(df_canal, titre, icone, date_range):
+    """
+    Affiche une section autonome pour un canal de vente donné.
+    Ne touche à aucune donnée du pipeline ERP principal — totalement indépendant.
+    """
+    st.divider()
+    st.header(f"{icone} {titre}")
+
+    if df_canal is None or df_canal.empty:
+        st.info(f"Aucune donnée trouvée pour « {titre} ». Vérifiez que le dossier Drive est bien configuré "
+                f"(ID renseigné + accès partagé avec le compte de service) et qu'il contient des fichiers.")
+        return
+
+    df_c = df_canal.copy()
+    df_c['DocDate'] = pd.to_datetime(df_c['DocDate'], errors='coerce')
+    df_c['Gamme'] = df_c['ItemName'].apply(get_gamme)
+    df_c = df_c.rename(columns={'CAISSE_EQ_PRECALC': 'Caisse Eq.'})
+
+    # Filtre par la même plage de dates que le reste du dashboard (sidebar)
+    if isinstance(date_range, tuple) and len(date_range) == 2:
+        mask = (df_c['DocDate'].dt.date >= date_range[0]) & (df_c['DocDate'].dt.date <= date_range[1])
+        df_c = df_c[mask]
+
+    if df_c.empty:
+        st.info(f"Aucune donnée pour « {titre} » sur la période sélectionnée dans la barre latérale.")
+        return
+
+    total_caisses = df_c['Caisse Eq.'].sum()
+    total_dollars = df_c['LineTotal'].sum()
+    total_litres = df_c['Litres'].sum() if 'Litres' in df_c.columns else 0
+
+    k1, k2, k3 = st.columns(3)
+    k1.metric("Total Caisses Éq.", f"{total_caisses:,.0f}")
+    k2.metric("Total Ventes", f"{total_dollars:,.2f} $")
+    if total_litres > 0:
+        k3.metric("Total Litres (fûts)", f"{total_litres:,.0f} L")
+
+    gammes_dispo = sorted(df_c['Gamme'].unique().tolist())
+    gamme_sel = st.selectbox(
+        "Filtrer par gamme", ['Toutes les gammes'] + gammes_dispo,
+        key=f"gamme_{titre}"
+    )
+    if gamme_sel != 'Toutes les gammes':
+        df_c = df_c[df_c['Gamme'] == gamme_sel]
+
+    tab_sku, tab_clients = st.tabs(["📦 Par SKU", "👥 Par client"])
+    with tab_sku:
+        sku_tbl = (
+            df_c.groupby(['ItemName', 'Gamme'])
+            .agg({'Caisse Eq.': 'sum', 'LineTotal': 'sum'})
+            .reset_index()
+            .rename(columns={'ItemName': 'SKU', 'LineTotal': 'Ventes ($)'})
+            .sort_values('Ventes ($)', ascending=False)
+        )
+        st.dataframe(
+            sku_tbl.style.format({'Caisse Eq.': '{:.2f}', 'Ventes ($)': '{:,.2f} $'}),
+            use_container_width=True, hide_index=True
+        )
+    with tab_clients:
+        client_tbl = (
+            df_c.groupby('CardName')
+            .agg({'Caisse Eq.': 'sum', 'LineTotal': 'sum'})
+            .reset_index()
+            .rename(columns={'CardName': 'Client', 'LineTotal': 'Ventes ($)'})
+            .sort_values('Ventes ($)', ascending=False)
+        )
+        st.dataframe(
+            client_tbl.style.format({'Caisse Eq.': '{:.2f}', 'Ventes ($)': '{:,.2f} $'}),
+            use_container_width=True, hide_index=True
+        )
+
+
 # --- EXCEL PRO ---
 def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_banner):
     output = io.BytesIO()
@@ -416,19 +489,16 @@ page = st.sidebar.radio("Marque :", ["Alchimiste", "LOOP"])
 df_raw_all = load_data_from_drive(ID_DOSSIER_ALCHIMISTE if page == "Alchimiste" else ID_DOSSIER_LOOP)
 
 if df_raw_all is not None:
-    # --- INTÉGRATION DES NOUVELLES SOURCES (Alchimiste seulement) ---
-    df_raw_all['Source'] = 'ERP'
-    df_raw_all['CAISSE_EQ_PRECALC'] = None
-    df_raw_all['Litres'] = 0.0
-
+    # --- CHARGEMENT DES 3 CANAUX SUPPLÉMENTAIRES (Alchimiste seulement) ---
+    # NOTE : ces canaux sont volontairement gardés SÉPARÉS du pipeline ERP (df_raw_all)
+    # pour éviter tout risque de double comptage si ces ventes sont aussi déjà
+    # présentes dans l'export ERP. Ils sont affichés dans leurs propres sections
+    # plus bas dans la page plutôt que mélangés aux totaux/graphiques existants.
+    df_cad, df_csp, df_keg = None, None, None
     if page == "Alchimiste":
         df_cad = load_ventes_reseau_from_drive(ID_DOSSIER_VENTES_CAD)
         df_csp = load_ventes_reseau_from_drive(ID_DOSSIER_VENTES_CSP)
         df_keg = load_keg_access_from_drive(ID_DOSSIER_KEG_ACCESS)
-
-        extra_dfs = [d for d in [df_cad, df_csp, df_keg] if d is not None and not d.empty]
-        if extra_dfs:
-            df_raw_all = pd.concat([df_raw_all] + extra_dfs, ignore_index=True, sort=False)
 
     # --- PRÉ-TRAITEMENT DES DATES ---
     df_raw_all['DocDate'] = pd.to_datetime(df_raw_all['DocDate'], errors='coerce')
@@ -499,26 +569,6 @@ if df_raw_all is not None:
         s1, s2 = st.columns(2)
         s1.metric("2026 YTD", f"{df_2026_full['LineTotal'].sum():,.0f} $")
         s2.metric("2025 YTD", f"{df_2025_ytd['LineTotal'].sum():,.0f} $", delta=f"{df_2026_full['LineTotal'].sum() - df_2025_ytd['LineTotal'].sum():,.0f} $")
-
-    # --- SUIVI DES VENTES EN FÛT (LITRES) ---
-    if df_raw['Litres'].sum() > 0:
-        st.divider()
-        st.header("🛢️ Ventes en fûts (Litres)")
-        litres_2026 = df_2026_full['Litres'].sum()
-        litres_2025 = df_2025_ytd['Litres'].sum()
-        lc1, lc2 = st.columns(2)
-        lc1.metric("Litres 2026 (YTD)", f"{litres_2026:,.0f} L")
-        lc2.metric("Litres 2025 (YTD comparable)", f"{litres_2025:,.0f} L", delta=f"{litres_2026 - litres_2025:,.0f} L")
-
-        litres_par_produit = (
-            df_filtered[df_filtered['Litres'] > 0]
-            .groupby('ItemName')['Litres'].sum()
-            .reset_index()
-            .rename(columns={'ItemName': 'Produit'})
-            .sort_values('Litres', ascending=False)
-        )
-        if not litres_par_produit.empty:
-            st.dataframe(litres_par_produit, use_container_width=True, hide_index=True)
 
     # --- VENTES DERNIÈRE SEMAINE ---
     st.divider()
@@ -667,6 +717,12 @@ if df_raw_all is not None:
               .bar(subset=['Variation'], align='mid', color=['#ff9999', '#99ff99']),
         use_container_width=True
     )
+
+    # --- SECTIONS INDÉPENDANTES PAR CANAL (CAD / CSP / Courtier) ---
+    if page == "Alchimiste":
+        render_section_canal(df_cad, "Ventes locales CAD", "🏠", date_sel)
+        render_section_canal(df_csp, "Ventes locales CSP", "🏠", date_sel)
+        render_section_canal(df_keg, "Ventes via courtier (Keg Access)", "🤝", date_sel)
 
 else:
     st.error("Données introuvables. Vérifiez vos dossiers Drive.")
