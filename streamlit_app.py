@@ -563,7 +563,8 @@ def render_section_canal(df_canal, titre, icone, date_range, debug_info=None):
 
 
 # --- EXCEL PRO ---
-def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_banner):
+def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_banner,
+                           df_cad=None, df_csp=None, df_keg=None, df_erp=None):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         workbook = writer.book
@@ -571,6 +572,7 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
         fmt_qty   = workbook.add_format({'num_format': '#,##0'})
         fmt_perc  = workbook.add_format({'num_format': '0.0%'})
         fmt_text  = workbook.add_format({'bold': False})
+        fmt_titre = workbook.add_format({'bold': True, 'font_size': 12})
 
         def save_sheet(df, name, is_money=False, add_row_total=True, with_gamme=False):
             df_t = df.copy()
@@ -590,6 +592,106 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
                     f = fmt_perc if 'Variation %' in str(col) else (fmt_money if is_money else fmt_qty)
                     ws.set_column(excel_col, excel_col, 20, f)
 
+        def save_sheet_canal(df_canal, name):
+            """Onglet dédié à un canal (CAD / CSP / Keg Access) : détail SKU + détail client."""
+            if df_canal is None or df_canal.empty:
+                pd.DataFrame({'Info': [f"Aucune donnée disponible pour {name}."]}).to_excel(
+                    writer, sheet_name=name, index=False
+                )
+                return
+
+            df_c = df_canal.copy()
+            df_c['Gamme'] = df_c['ItemName'].apply(get_gamme)
+            df_c = df_c.rename(columns={'CAISSE_EQ_PRECALC': 'Caisse Eq.'})
+
+            sku_tbl = (
+                df_c.groupby(['ItemName', 'Gamme'])
+                .agg({'Caisse Eq.': 'sum', 'LineTotal': 'sum'})
+                .reset_index()
+                .rename(columns={'ItemName': 'SKU', 'LineTotal': 'Ventes ($)'})
+                .sort_values('Ventes ($)', ascending=False)
+            )
+            sku_tbl.loc[len(sku_tbl)] = ['TOTAL', '', sku_tbl['Caisse Eq.'].sum(), sku_tbl['Ventes ($)'].sum()]
+
+            sku_tbl.to_excel(writer, sheet_name=name, startrow=1, index=False)
+            ws = writer.sheets[name]
+            ws.write(0, 0, "Détail par SKU", fmt_titre)
+            ws.set_column(0, 0, 42)
+            ws.set_column(1, 1, 16, fmt_text)
+            ws.set_column(2, 2, 16, fmt_qty)
+            ws.set_column(3, 3, 18, fmt_money)
+
+            client_tbl = (
+                df_c.groupby('CardName')
+                .agg({'Caisse Eq.': 'sum', 'LineTotal': 'sum'})
+                .reset_index()
+                .rename(columns={'CardName': 'Client', 'LineTotal': 'Ventes ($)'})
+                .sort_values('Ventes ($)', ascending=False)
+            )
+            start_row = len(sku_tbl) + 4
+            ws.write(start_row, 0, "Détail par client", fmt_titre)
+            client_tbl.to_excel(writer, sheet_name=name, startrow=start_row + 1, index=False)
+
+        def save_sheet_combine(df_erp, df_cad, df_csp, df_keg, name='Toutes Ventes par SKU'):
+            """Onglet combiné : total par SKU tous canaux confondus (ERP + CAD + CSP + Keg Access), année en cours."""
+            frames = []
+
+            if df_erp is not None and not df_erp.empty and {'ItemName', 'CAISSE EQ', 'LineTotal'}.issubset(df_erp.columns):
+                t = df_erp[['ItemName', 'CAISSE EQ', 'LineTotal']].rename(
+                    columns={'CAISSE EQ': 'Caisse Eq.', 'LineTotal': 'Ventes ($)'}
+                )
+                t['Canal'] = 'ERP'
+                frames.append(t)
+
+            for df_x, label in [(df_cad, 'CAD'), (df_csp, 'CSP'), (df_keg, 'Keg Access')]:
+                if df_x is not None and not df_x.empty:
+                    df_x2 = df_x.copy()
+                    df_x2['DocDate'] = pd.to_datetime(df_x2['DocDate'], errors='coerce')
+                    df_x2 = df_x2[df_x2['DocDate'].dt.year == date.today().year]
+                    if df_x2.empty:
+                        continue
+                    t = df_x2[['ItemName', 'CAISSE_EQ_PRECALC', 'LineTotal']].rename(
+                        columns={'CAISSE_EQ_PRECALC': 'Caisse Eq.', 'LineTotal': 'Ventes ($)'}
+                    )
+                    t['Canal'] = label
+                    frames.append(t)
+
+            if not frames:
+                pd.DataFrame({'Info': ["Aucune donnée disponible."]}).to_excel(writer, sheet_name=name, index=False)
+                return
+
+            combo = pd.concat(frames, ignore_index=True)
+            combo['Gamme'] = combo['ItemName'].apply(get_gamme)
+
+            # Vue 1 : total par SKU, tous canaux confondus
+            tbl = (
+                combo.groupby(['ItemName', 'Gamme'])
+                .agg({'Caisse Eq.': 'sum', 'Ventes ($)': 'sum'})
+                .reset_index()
+                .rename(columns={'ItemName': 'SKU'})
+                .sort_values('Ventes ($)', ascending=False)
+            )
+            tbl.loc[len(tbl)] = ['TOTAL', '', tbl['Caisse Eq.'].sum(), tbl['Ventes ($)'].sum()]
+            tbl.to_excel(writer, sheet_name=name, startrow=1, index=False)
+            ws = writer.sheets[name]
+            ws.write(0, 0, "Total par SKU — tous canaux confondus", fmt_titre)
+            ws.set_column(0, 0, 42)
+            ws.set_column(1, 1, 16, fmt_text)
+            ws.set_column(2, 2, 16, fmt_qty)
+            ws.set_column(3, 3, 18, fmt_money)
+
+            # Vue 2 : détail par SKU x Canal (pour voir la répartition)
+            tbl_detail = (
+                combo.groupby(['ItemName', 'Canal'])
+                .agg({'Caisse Eq.': 'sum', 'Ventes ($)': 'sum'})
+                .reset_index()
+                .rename(columns={'ItemName': 'SKU'})
+                .sort_values(['SKU', 'Ventes ($)'], ascending=[True, False])
+            )
+            start_row = len(tbl) + 4
+            ws.write(start_row, 0, "Détail par SKU et par canal", fmt_titre)
+            tbl_detail.to_excel(writer, sheet_name=name, startrow=start_row + 1, index=False)
+
         # Onglets SKU — colonne Gamme ajoutée
         save_sheet(df_week_comp, 'Comparaison Semaine', add_row_total=True,  with_gamme=True)
         save_sheet(pivot_sku,    'Détail SKU 2026',     add_row_total=True,  with_gamme=True)
@@ -598,6 +700,12 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
         save_sheet(pivot_val,    'Dollars Mensuels YOY',is_money=True, add_row_total=False, with_gamme=False)
         # Bannières — index = GroupName, pas de Gamme
         save_sheet(pivot_banner, 'Bannières 2026',      add_row_total=True,  with_gamme=False)
+        # Onglets par canal (CAD / CSP / Keg Access) — un onglet distinct chacun
+        if df_cad is not None or df_csp is not None or df_keg is not None:
+            save_sheet_canal(df_cad, 'Ventes CAD')
+            save_sheet_canal(df_csp, 'Ventes CSP')
+            save_sheet_canal(df_keg, 'Keg Access')
+            save_sheet_combine(df_erp, df_cad, df_csp, df_keg)
     return output.getvalue()
 
 # --- MAIN APP ---
@@ -782,7 +890,13 @@ if df_raw_all is not None:
     pivot_sku_xls = df_2026_full.pivot_table(index='ItemName', columns='Mois_Nom', values='CAISSE EQ', aggfunc='sum').fillna(0)
     pivot_banner_xls = df_2026_full.groupby('GroupName')['CAISSE EQ'].sum().to_frame()
 
-    excel_file = generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku_xls, pivot_banner_xls)
+    excel_file = generate_styled_excel(
+        df_week_comp, pivot_vol, pivot_val, pivot_sku_xls, pivot_banner_xls,
+        df_cad=df_cad if page == "Alchimiste" else None,
+        df_csp=df_csp if page == "Alchimiste" else None,
+        df_keg=df_keg if page == "Alchimiste" else None,
+        df_erp=df_2026_full,
+    )
     st.sidebar.download_button(f"📥 Télécharger Rapport {page} (Excel)", data=excel_file, file_name=f"Rapport_{page}_{date.today()}.xlsx")
 
     # --- TOP BANNIÈRES ET CLIENTS ---
