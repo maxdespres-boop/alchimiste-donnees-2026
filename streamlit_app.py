@@ -282,6 +282,109 @@ def load_ventes_reseau_from_drive(folder_id):
 
 
 @st.cache_data(ttl=600)
+def parse_format_hl(format_val):
+    """
+    Décode la colonne 'Format' des rapports historiques Keg Access (export 'Flow Sales by Product').
+    Cette colonne donne directement le volume (en litres) d'UNE unité vendue, peu importe le produit :
+    - 11.35 -> une caisse de 24 x 473ml (11.35 L) -> caisses éq. de 12 = 11.35 / 5.676 ≈ 2.0
+    - 20, 30, etc. (>= 15L) -> un fût -> tracké en litres, pas en caisses éq.
+    Retourne (multiplicateur_caisse_eq, litres_par_unite) — l'un des deux est toujours None.
+    """
+    try:
+        v = float(format_val)
+    except (TypeError, ValueError):
+        return None, None
+    if v <= 0:
+        return None, None
+    if v < 15:
+        # Volume d'une caisse (peu importe le format exact) -> caisses éq. de 12 x 473ml (5.676 L/caisse)
+        return v / 5.676, None
+    # Fût
+    return 0.0, v
+
+
+def clean_keg_description(desc):
+    """
+    Nettoie la colonne 'Description' des rapports historiques Keg Access
+    (ex: 'Alchimiste Blonde SANS GLUTEN cs 24x473ml' -> 'Alchimiste Blonde SANS GLUTEN')
+    pour obtenir un ItemName compatible avec get_gamme(). Le format d'emballage
+    n'a pas besoin d'être conservé ici car il est déjà capté par la colonne 'Format'.
+    """
+    s = str(desc).strip()
+    # Segment de type "cs 24x473ml", "case 24x473ml", "Caisse 24.473ml", "24x473m"...
+    s = re.sub(r'\b(cs|case|caisses?)?\s*\d+\s*[x\.\s]\s*\d+\s*m?l?\b\.?', '', s, flags=re.IGNORECASE)
+    # Format fût isolé, ex: "20L", "30 L"
+    s = re.sub(r'\b\d+\s*L\b\.?', '', s, flags=re.IGNORECASE)
+    # "cs"/"case"/"caisse" isolé restant en fin de texte
+    s = re.sub(r'\b(cs|case|caisses?)\b\.?\s*$', '', s, flags=re.IGNORECASE)
+    # Suffixe de devise parasite en fin de texte (ex: "CAD")
+    s = re.sub(r'\bCAD\b\s*$', '', s)
+    return re.sub(r'\s+', ' ', s).strip()
+
+
+def parse_keg_text_format(desc):
+    """
+    Décode le format d'un produit Keg Access à partir du texte libre uniquement
+    (utilisé pour le rapport mensuel 'Par CLIENT', qui n'a pas de colonne Format/HL séparée).
+    Retourne (multiplicateur_caisse_eq, litres_par_unite).
+    """
+    s = str(desc).strip().upper()
+    m_case = re.search(r'\d+\s*[X\.]\s*\d+\s*M?L?\b', s)
+    if m_case:
+        return 2.0, None  # tous les formats "caisse" observés sont des 24-packs (24 x 473ml)
+    m_fut = re.search(r'\b(\d+)\s*L\b', s)
+    if m_fut:
+        return 0.0, float(m_fut.group(1))
+    if re.search(r'\b(CS|CASE|CAISSE)\b', s):
+        return 2.0, None  # "cs" seul sans taille précisée -> caisse de 24 par défaut
+    return None, None
+
+
+def _parse_keg_par_client(df_sheet):
+    """
+    Parse la feuille 'Par CLIENT' des rapports mensuels Keg Access (export QuickBooks-style) :
+    des sections par client (nom en colonne 1) contenant des lignes 'Invoice' (Type/Date/Num/Memo/Qty/Sales Price/Amount)
+    et des lignes de sous-total à ignorer. Retourne un DataFrame normalisé ou None si la structure ne correspond pas.
+    """
+    header_matches = df_sheet.index[
+        df_sheet.apply(
+            lambda r: (r.astype(str).str.strip() == 'Type').any() and (r.astype(str).str.strip() == 'Memo').any(),
+            axis=1
+        )
+    ]
+    if len(header_matches) == 0:
+        return None
+    header_row = header_matches[0]
+
+    col_map = {}
+    for idx, val in enumerate(df_sheet.iloc[header_row]):
+        if pd.notna(val) and str(val).strip():
+            col_map[str(val).strip()] = idx
+
+    if not {'Type', 'Date', 'Memo', 'Qty', 'Amount'}.issubset(col_map.keys()):
+        return None
+
+    account_col = 1  # colonne où apparaît le nom du client sur les lignes d'en-tête de section
+    df_data = df_sheet.iloc[header_row + 1:].copy()
+
+    type_col = col_map['Type']
+    est_ligne_section = df_data[type_col].isna() & df_data[account_col].notna()
+    comptes_ffill = df_data[account_col].where(est_ligne_section).ffill()
+
+    lignes_detail = df_data[df_data[type_col].astype(str).str.strip() == 'Invoice'].copy()
+    if lignes_detail.empty:
+        return None
+    lignes_detail['__Compte__'] = comptes_ffill.loc[lignes_detail.index]
+
+    return pd.DataFrame({
+        'CardName': lignes_detail['__Compte__'],
+        'DocDate': lignes_detail[col_map['Date']],
+        'Description': lignes_detail[col_map['Memo']],
+        'Qty': lignes_detail[col_map['Qty']],
+        'Amount': lignes_detail[col_map['Amount']],
+    })
+
+
 def load_keg_access_from_drive(folder_id):
     """
     Charge et normalise les rapports Keg Access (ventes CSP via courtier).
@@ -327,50 +430,165 @@ def load_keg_access_from_drive(folder_id):
                 ).execute()
             else:
                 content = service.files().get_media(fileId=item['id']).execute()
-            df_sheet = pd.read_excel(io.BytesIO(content), header=None, engine='openpyxl')
 
-            header_matches = df_sheet.index[
-                df_sheet.apply(lambda r: r.astype(str).str.contains('Account Name', na=False).any(), axis=1)
-            ]
-            if len(header_matches) == 0:
-                debug.append({'fichier': item['name'], 'statut': "⚠️ En-tête 'Account Name' introuvable — structure inattendue."})
-                continue
-            header_row = header_matches[0]
+            content_io = io.BytesIO(content)
+            noms_onglets = pd.ExcelFile(content_io, engine='openpyxl').sheet_names
+            onglet_client = next((n for n in noms_onglets if 'client' in n.lower()), None)
 
-            df_data = df_sheet.iloc[header_row + 1:].copy()
-            df_data.columns = [str(c).replace('↑', '').strip() for c in df_sheet.iloc[header_row]]
-
-            if 'Account Name' not in df_data.columns or 'Product: Product Name' not in df_data.columns:
-                debug.append({'fichier': item['name'], 'statut': f"⚠️ Colonnes attendues introuvables. Colonnes lues : {list(df_data.columns)}"})
-                continue
-
-            df_data['Account Name'] = df_data['Account Name'].ffill()
-            df_data = df_data[df_data['Account Name'].astype(str).str.strip().str.upper() != 'GRAND TOTAL']
-
-            date_fichier = _date_from_filename_or_meta(item)
             lignes_avant = len(lignes)
 
-            for _, row in df_data.iterrows():
-                code = row.get('Product: Product Name')
-                if pd.isna(code) or not str(code).strip():
+            if onglet_client:
+                # --- Format mensuel multi-onglets (export QuickBooks-style) : feuille 'Par CLIENT' ---
+                df_sheet_client = pd.read_excel(content_io, sheet_name=onglet_client, header=None, engine='openpyxl')
+                df_parsed = _parse_keg_par_client(df_sheet_client)
+                if df_parsed is None:
+                    debug.append({'fichier': item['name'], 'statut': f"⚠️ Onglet '{onglet_client}' trouvé mais structure inattendue (colonnes Type/Date/Memo/Qty/Amount introuvables)."})
                     continue
-                item_name, item_code = decode_keg_access_sku(code)
-                qte = _to_number(row.get('Quantity (#)', 0))
-                montant = _to_number(row.get('Invoice Line Item Total (#)', 0))
 
-                lignes.append({
-                    'DocDate': date_fichier,
-                    'DateLivraison': pd.NaT,
-                    'ItemCode': item_code,
-                    'ItemName': item_name,
-                    'CardName': row.get('Account Name', ''),
-                    'GroupName': 'Courtier (Keg Access)',
-                    'LineQty': qte,
-                    'LineTotal': montant,
-                    'CAISSE_EQ_PRECALC': qte * 2,  # '-CS' = caisse de 24 -> 2 caisses éq. de 12
-                    'Litres': 0.0,
-                    'Source': 'KegAccess',
-                })
+                lignes_ignorees_format = 0
+                for _, row in df_parsed.iterrows():
+                    desc = row.get('Description')
+                    if pd.isna(desc) or not str(desc).strip():
+                        continue
+                    # Filet de sécurité : ne pas confondre des lignes de dépôt de contenants avec de vraies ventes
+                    if re.search(r'D[ÉE]P[ÔO]T|CONSIGNE', str(desc), flags=re.IGNORECASE):
+                        continue
+                    item_name = clean_keg_description(desc)
+                    mult_caisse, litres_unite = parse_keg_text_format(desc)
+                    if mult_caisse is None and litres_unite is None:
+                        lignes_ignorees_format += 1
+                        continue
+
+                    qte = _to_number(row.get('Qty', 0))
+                    montant = _to_number(row.get('Amount', 0))
+                    doc_date = pd.to_datetime(row.get('DocDate'), errors='coerce')
+                    item_code = f"KEG-HIST-{re.sub(r'[^A-Z0-9]', '', item_name.upper())[:40]}"
+
+                    lignes.append({
+                        'DocDate': doc_date,
+                        'DateLivraison': pd.NaT,
+                        'ItemCode': item_code,
+                        'ItemName': item_name,
+                        'CardName': row.get('CardName', ''),
+                        'GroupName': 'Courtier (Keg Access)',
+                        'LineQty': qte,
+                        'LineTotal': montant,
+                        'CAISSE_EQ_PRECALC': qte * (mult_caisse or 0.0),
+                        'Litres': qte * litres_unite if litres_unite else 0.0,
+                        'Source': 'KegAccess',
+                    })
+                if lignes_ignorees_format:
+                    debug.append({'fichier': item['name'], 'statut': f"⚠️ {lignes_ignorees_format} ligne(s) avec un format non reconnu dans la description — ignorée(s)."})
+                debug.append({'fichier': item['name'], 'statut': f"✅ (mensuel) {len(lignes) - lignes_avant} ligne(s) importée(s)"})
+                continue
+
+            # --- Formats à un seul onglet (hebdomadaire ou historique/annuel) ---
+            df_sheet = pd.read_excel(content_io, header=None, engine='openpyxl')
+
+            # --- Détection du format du fichier ---
+            est_hebdo = df_sheet.apply(
+                lambda r: r.astype(str).str.contains('Product: Product Name', na=False).any(), axis=1
+            ).any()
+            est_historique = df_sheet.apply(
+                lambda r: (r.astype(str).str.strip() == 'Invoice Date').any(), axis=1
+            ).any()
+
+            if est_hebdo:
+                # --- Format hebdomadaire : Account Name / Product: Product Name / Quantity (#) ---
+                header_matches = df_sheet.index[
+                    df_sheet.apply(lambda r: r.astype(str).str.contains('Account Name', na=False).any(), axis=1)
+                ]
+                header_row = header_matches[0]
+                df_data = df_sheet.iloc[header_row + 1:].copy()
+                df_data.columns = [str(c).replace('↑', '').strip() for c in df_sheet.iloc[header_row]]
+
+                if 'Account Name' not in df_data.columns or 'Product: Product Name' not in df_data.columns:
+                    debug.append({'fichier': item['name'], 'statut': f"⚠️ Colonnes attendues introuvables. Colonnes lues : {list(df_data.columns)}"})
+                    continue
+
+                df_data['Account Name'] = df_data['Account Name'].ffill()
+                df_data = df_data[df_data['Account Name'].astype(str).str.strip().str.upper() != 'GRAND TOTAL']
+                date_fichier = _date_from_filename_or_meta(item)
+
+                for _, row in df_data.iterrows():
+                    code = row.get('Product: Product Name')
+                    if pd.isna(code) or not str(code).strip():
+                        continue
+                    item_name, item_code = decode_keg_access_sku(code)
+                    qte = _to_number(row.get('Quantity (#)', 0))
+                    montant = _to_number(row.get('Invoice Line Item Total (#)', 0))
+
+                    lignes.append({
+                        'DocDate': date_fichier,
+                        'DateLivraison': pd.NaT,
+                        'ItemCode': item_code,
+                        'ItemName': item_name,
+                        'CardName': row.get('Account Name', ''),
+                        'GroupName': 'Courtier (Keg Access)',
+                        'LineQty': qte,
+                        'LineTotal': montant,
+                        'CAISSE_EQ_PRECALC': qte * 2,  # '-CS' = caisse de 24 -> 2 caisses éq. de 12
+                        'Litres': 0.0,
+                        'Source': 'KegAccess',
+                    })
+
+            elif est_historique:
+                # --- Format historique/mensuel : export Salesforce 'Flow Sales by Product' ---
+                # Colonnes : Account Name | Invoice Date | Description | Quantity (#) |
+                #            Invoice Line Item Total (#) | Format | HL
+                header_matches = df_sheet.index[
+                    df_sheet.apply(lambda r: (r.astype(str).str.strip() == 'Invoice Date').any(), axis=1)
+                ]
+                header_row = header_matches[0]
+                df_data = df_sheet.iloc[header_row + 1:].copy()
+                df_data.columns = [str(c).strip() for c in df_sheet.iloc[header_row]]
+
+                colonnes_requises = {'Account Name', 'Invoice Date', 'Description', 'Quantity (#)', 'Format'}
+                if not colonnes_requises.issubset(df_data.columns):
+                    debug.append({'fichier': item['name'], 'statut': f"⚠️ Colonnes attendues introuvables. Colonnes lues : {list(df_data.columns)}"})
+                    continue
+
+                # Exclut la ligne 'Total' de bas de page et les lignes de pied de page (copyright, etc.)
+                df_data = df_data.dropna(subset=['Account Name', 'Invoice Date'])
+                df_data = df_data[df_data['Account Name'].astype(str).str.strip().str.upper() != 'TOTAL']
+
+                lignes_ignorees_format = 0
+                for _, row in df_data.iterrows():
+                    desc = row.get('Description')
+                    if pd.isna(desc) or not str(desc).strip():
+                        continue
+                    item_name = clean_keg_description(desc)
+                    item_code = f"KEG-HIST-{re.sub(r'[^A-Z0-9]', '', item_name.upper())[:40]}"
+
+                    mult_caisse, litres_unite = parse_format_hl(row.get('Format'))
+                    if mult_caisse is None and litres_unite is None:
+                        lignes_ignorees_format += 1
+                        continue
+
+                    qte = _to_number(row.get('Quantity (#)', 0))
+                    montant = _to_number(row.get('Invoice Line Item Total (#)', 0))
+                    doc_date = pd.to_datetime(row.get('Invoice Date'), errors='coerce', dayfirst=True)
+
+                    lignes.append({
+                        'DocDate': doc_date,
+                        'DateLivraison': pd.NaT,
+                        'ItemCode': item_code,
+                        'ItemName': item_name,
+                        'CardName': row.get('Account Name', ''),
+                        'GroupName': 'Courtier (Keg Access)',
+                        'LineQty': qte,
+                        'LineTotal': montant,
+                        'CAISSE_EQ_PRECALC': qte * (mult_caisse or 0.0),
+                        'Litres': qte * litres_unite if litres_unite else 0.0,
+                        'Source': 'KegAccess',
+                    })
+                if lignes_ignorees_format:
+                    debug.append({'fichier': item['name'], 'statut': f"⚠️ {lignes_ignorees_format} ligne(s) avec un format non reconnu (colonne 'Format') — ignorée(s)."})
+
+            else:
+                debug.append({'fichier': item['name'], 'statut': "⚠️ Format de fichier non reconnu (ni hebdomadaire, ni historique Salesforce)."})
+                continue
+
             debug.append({'fichier': item['name'], 'statut': f"✅ {len(lignes) - lignes_avant} ligne(s) importée(s)"})
         except Exception as e:
             debug.append({'fichier': item.get('name', '?'), 'statut': f"❌ Erreur de lecture : {e}"})
