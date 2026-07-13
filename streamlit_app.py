@@ -64,6 +64,10 @@ def parse_format_caisse_eq(format_str):
     - '473x24'   -> 24 unités/caisse -> 2.0 caisses éq.
     - '473x4x6'  -> 4 x 6 = 24 unités -> 2.0 caisses éq. (même logique que les 4-Pack existants)
     - '20L'      -> fût : 0 caisse éq., 20 litres/unité (tracké séparément, cf. SKU LITRES)
+
+    Robuste à l'ordre des nombres (ex: '12x473' ou '473x12' donnent le même résultat) :
+    on distingue le nombre "taille" (mL, généralement >= 100) des nombres "quantité"
+    (< 100) plutôt que de supposer une position fixe.
     """
     s = str(format_str).strip().upper()
 
@@ -73,9 +77,13 @@ def parse_format_caisse_eq(format_str):
         return 0.0, litres
 
     nombres = [int(n) for n in re.findall(r'\d+', s)]
-    if len(nombres) >= 2:
+    if not nombres:
+        return 1.0, None
+
+    quantites = [n for n in nombres if n < 100]   # ex: 12, 24, 4, 6, 20...
+    if quantites:
         unites = 1
-        for n in nombres[1:]:
+        for n in quantites:
             unites *= n
         return unites / 12, None
 
@@ -133,6 +141,30 @@ def _read_excel_any(content, filename):
     if filename.lower().endswith('.xls'):
         return pd.read_excel(io.BytesIO(content), header=None, engine='xlrd')
     return pd.read_excel(io.BytesIO(content), header=None, engine='openpyxl')
+
+
+def _to_number(val, default=0.0):
+    """
+    Convertit une valeur potentiellement formatée (ex: '$71.96', '1 234,56', '29') en float.
+    pd.to_numeric() échoue silencieusement (-> NaN) sur les montants avec symbole $ ou espaces
+    d'insécabilité — ce qui causait des revenus à 0$ pour Keg Access.
+    """
+    if pd.isna(val):
+        return default
+    if isinstance(val, (int, float)):
+        return float(val)
+    s = str(val).strip()
+    s = re.sub(r'[^\d,.\-]', '', s)  # enlève $, espaces, espaces insécables, etc.
+    if s.count(',') and not s.count('.'):
+        s = s.replace(',', '.')
+    else:
+        s = s.replace(',', '')  # virgule = séparateur de milliers si un point est déjà présent
+    if s in ('', '-', '.'):
+        return default
+    try:
+        return float(s)
+    except ValueError:
+        return default
 
 
 def _date_from_filename_or_meta(item):
@@ -219,10 +251,8 @@ def load_ventes_reseau_from_drive(folder_id):
                 reseau, gamme_txt, produit_txt, format_txt = parts[0], parts[1], parts[2], parts[3]
 
                 mult_caisse, litres_unite = parse_format_caisse_eq(format_txt)
-                qte = pd.to_numeric(row.get('Qté', 0), errors='coerce')
-                qte = 0 if pd.isna(qte) else qte
-                montant = pd.to_numeric(row.get('Montant', 0), errors='coerce')
-                montant = 0 if pd.isna(montant) else montant
+                qte = _to_number(row.get('Qté', 0))
+                montant = _to_number(row.get('Montant', 0))
 
                 item_name = f"{gamme_txt} - {produit_txt}"
                 item_code = f"{reseau}-{produit_txt}-{format_txt}".upper().replace(' ', '')
@@ -325,10 +355,8 @@ def load_keg_access_from_drive(folder_id):
                 if pd.isna(code) or not str(code).strip():
                     continue
                 item_name, item_code = decode_keg_access_sku(code)
-                qte = pd.to_numeric(row.get('Quantity (#)', 0), errors='coerce')
-                qte = 0 if pd.isna(qte) else qte
-                montant = pd.to_numeric(row.get('Invoice Line Item Total (#)', 0), errors='coerce')
-                montant = 0 if pd.isna(montant) else montant
+                qte = _to_number(row.get('Quantity (#)', 0))
+                montant = _to_number(row.get('Invoice Line Item Total (#)', 0))
 
                 lignes.append({
                     'DocDate': date_fichier,
