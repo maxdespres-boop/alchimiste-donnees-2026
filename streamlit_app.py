@@ -483,6 +483,3 @@ st.dataframe(
     hide_index=True
 )
 
-    'Ventes ($)': quatuor_june_2025_data['ventes'],
-    'Rabais ($)': quatuor_june_2025_data['rabais']
-})
