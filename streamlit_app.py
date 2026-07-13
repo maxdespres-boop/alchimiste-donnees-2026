@@ -14,7 +14,6 @@ ID_DOSSIER_ALCHIMISTE = "1eTeWop4EVTDB9GbAPPixJZDcVYeZnauD"
 ID_DOSSIER_LOOP = "1LOTLoVm4-FJr96FQTOZzICrn-ZJmB4Pb" 
 
 # --- NOUVEAUX DOSSIERS DRIVE : ventes locales (CAD/CSP) et courtier (Keg Access) ---
-# Ces 3 rapports sont spécifiques à Alchimiste. Remplacer par les vrais ID de dossiers Drive.
 ID_DOSSIER_VENTES_CAD = "1qebuLamqI6uSwuuNTHCmlFzdhjuLdiC_"
 ID_DOSSIER_VENTES_CSP = "1l6EWS68rlIAZt6xdr6IFG15ymlHquB-z"
 ID_DOSSIER_KEG_ACCESS = "1RSKQfcfovdGfbwNPiT6TCqOBgYvsyvFm"
@@ -150,22 +149,48 @@ def load_ventes_reseau_from_drive(folder_id):
     Charge et normalise les rapports 'VENTES CAD' / 'VENTES CSP' (ventes locales).
     Le réseau (CAD ou CSP) et le SKU sont encodés dans la colonne Mémo/description,
     au format 'RESEAU // GAMME // PRODUIT // FORMAT' (ex: 'CAD // ALCHIMISTE AUTHENTIQUE // BLONDE // 473x12').
+
+    Retourne (DataFrame ou None, liste de diagnostics par fichier) pour faciliter le dépannage.
     """
     service = get_gdrive_service()
-    query = f"'{folder_id}' in parents and (name contains '.xls' or name contains '.xlsx') and trashed = false"
-    items = service.files().list(q=query, fields="files(id, name, modifiedTime)").execute().get('files', [])
+    debug = []
+    try:
+        query = f"'{folder_id}' in parents and trashed = false"
+        items = service.files().list(q=query, fields="files(id, name, mimeType, modifiedTime)").execute().get('files', [])
+    except Exception as e:
+        return None, [{'fichier': '(accès dossier)', 'statut': f"❌ Erreur d'accès au dossier Drive : {e}"}]
+
     if not items:
-        return None
+        return None, [{'fichier': '(dossier)', 'statut': "❌ Dossier vide ou introuvable (0 fichier retourné par l'API)."}]
+
+    fichiers_valides = [
+        i for i in items
+        if i['name'].lower().endswith(('.xls', '.xlsx'))
+        or i.get('mimeType') == 'application/vnd.google-apps.spreadsheet'
+    ]
+    if not fichiers_valides:
+        noms = [f"{i['name']} ({i.get('mimeType', '?')})" for i in items]
+        return None, [{'fichier': '(dossier)', 'statut': f"❌ {len(items)} fichier(s) trouvé(s) mais aucun .xls/.xlsx reconnu : {noms}"}]
 
     lignes = []
-    for item in items:
+    for item in fichiers_valides:
         try:
-            content = service.files().get_media(fileId=item['id']).execute()
-            df_sheet = _read_excel_any(content, item['name'])
+            mime = item.get('mimeType', '')
+            if mime == 'application/vnd.google-apps.spreadsheet':
+                # Fichier auto-converti en Google Sheet par Drive : il faut l'exporter, pas le télécharger
+                content = service.files().export(
+                    fileId=item['id'],
+                    mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                ).execute()
+                df_sheet = pd.read_excel(io.BytesIO(content), header=None, engine='openpyxl')
+            else:
+                content = service.files().get_media(fileId=item['id']).execute()
+                df_sheet = _read_excel_any(content, item['name'])
 
             # Ligne d'en-tête = celle dont la colonne 1 vaut exactement "Date"
             header_matches = df_sheet.index[df_sheet[1].astype(str).str.strip() == 'Date']
             if len(header_matches) == 0:
+                debug.append({'fichier': item['name'], 'statut': "⚠️ Ligne d'en-tête 'Date' introuvable en colonne B — structure inattendue."})
                 continue
             header_row = header_matches[0]
 
@@ -173,10 +198,17 @@ def load_ventes_reseau_from_drive(folder_id):
             df_data.columns = [str(c).strip() for c in df_sheet.iloc[header_row]]
             df_data = df_data.dropna(subset=['Date'])
 
+            if 'Mémo/description' not in df_data.columns:
+                debug.append({'fichier': item['name'], 'statut': f"⚠️ Colonne 'Mémo/description' introuvable. Colonnes lues : {list(df_data.columns)}"})
+                continue
+
+            lignes_avant = len(lignes)
+            lignes_ignorees = 0
             for _, row in df_data.iterrows():
                 memo = str(row.get('Mémo/description', ''))
                 parts = [p.strip() for p in memo.split('//')]
                 if len(parts) < 4:
+                    lignes_ignorees += 1
                     continue
                 reseau, gamme_txt, produit_txt, format_txt = parts[0], parts[1], parts[2], parts[3]
 
@@ -202,10 +234,15 @@ def load_ventes_reseau_from_drive(folder_id):
                     'Litres': qte * litres_unite if litres_unite else 0.0,
                     'Source': reseau,
                 })
-        except Exception:
+            statut = f"✅ {len(lignes) - lignes_avant} ligne(s) importée(s)"
+            if lignes_ignorees:
+                statut += f" ({lignes_ignorees} ligne(s) ignorée(s), Mémo mal formé)"
+            debug.append({'fichier': item['name'], 'statut': statut})
+        except Exception as e:
+            debug.append({'fichier': item.get('name', '?'), 'statut': f"❌ Erreur de lecture : {e}"})
             continue
 
-    return pd.DataFrame(lignes) if lignes else None
+    return (pd.DataFrame(lignes) if lignes else None), debug
 
 
 @st.cache_data(ttl=600)
@@ -214,32 +251,62 @@ def load_keg_access_from_drive(folder_id):
     Charge et normalise les rapports Keg Access (ventes CSP via courtier).
     Pas de date par ligne dans ce rapport : on utilise la date du nom de fichier
     si présente (format AAAA-MM-JJ), sinon la date de dernière modification du fichier Drive.
+
+    Retourne (DataFrame ou None, liste de diagnostics par fichier) pour faciliter le dépannage.
     """
     service = get_gdrive_service()
-    query = f"'{folder_id}' in parents and name contains '.xlsx' and trashed = false"
-    items = service.files().list(q=query, fields="files(id, name, modifiedTime)").execute().get('files', [])
+    debug = []
+    try:
+        query = f"'{folder_id}' in parents and trashed = false"
+        items = service.files().list(q=query, fields="files(id, name, mimeType, modifiedTime)").execute().get('files', [])
+    except Exception as e:
+        return None, [{'fichier': '(accès dossier)', 'statut': f"❌ Erreur d'accès au dossier Drive : {e}"}]
+
     if not items:
-        return None
+        return None, [{'fichier': '(dossier)', 'statut': "❌ Dossier vide ou introuvable (0 fichier retourné par l'API)."}]
+
+    fichiers_valides = [
+        i for i in items
+        if i['name'].lower().endswith('.xlsx')
+        or i.get('mimeType') == 'application/vnd.google-apps.spreadsheet'
+    ]
+    if not fichiers_valides:
+        noms = [f"{i['name']} ({i.get('mimeType', '?')})" for i in items]
+        return None, [{'fichier': '(dossier)', 'statut': f"❌ {len(items)} fichier(s) trouvé(s) mais aucun .xlsx reconnu : {noms}"}]
 
     lignes = []
-    for item in items:
+    for item in fichiers_valides:
         try:
-            content = service.files().get_media(fileId=item['id']).execute()
+            mime = item.get('mimeType', '')
+            if mime == 'application/vnd.google-apps.spreadsheet':
+                content = service.files().export(
+                    fileId=item['id'],
+                    mimeType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                ).execute()
+            else:
+                content = service.files().get_media(fileId=item['id']).execute()
             df_sheet = pd.read_excel(io.BytesIO(content), header=None, engine='openpyxl')
 
             header_matches = df_sheet.index[
                 df_sheet.apply(lambda r: r.astype(str).str.contains('Account Name', na=False).any(), axis=1)
             ]
             if len(header_matches) == 0:
+                debug.append({'fichier': item['name'], 'statut': "⚠️ En-tête 'Account Name' introuvable — structure inattendue."})
                 continue
             header_row = header_matches[0]
 
             df_data = df_sheet.iloc[header_row + 1:].copy()
             df_data.columns = [str(c).replace('↑', '').strip() for c in df_sheet.iloc[header_row]]
+
+            if 'Account Name' not in df_data.columns or 'Product: Product Name' not in df_data.columns:
+                debug.append({'fichier': item['name'], 'statut': f"⚠️ Colonnes attendues introuvables. Colonnes lues : {list(df_data.columns)}"})
+                continue
+
             df_data['Account Name'] = df_data['Account Name'].ffill()
             df_data = df_data[df_data['Account Name'].astype(str).str.strip().str.upper() != 'GRAND TOTAL']
 
             date_fichier = _date_from_filename_or_meta(item)
+            lignes_avant = len(lignes)
 
             for _, row in df_data.iterrows():
                 code = row.get('Product: Product Name')
@@ -264,10 +331,12 @@ def load_keg_access_from_drive(folder_id):
                     'Litres': 0.0,
                     'Source': 'KegAccess',
                 })
-        except Exception:
+            debug.append({'fichier': item['name'], 'statut': f"✅ {len(lignes) - lignes_avant} ligne(s) importée(s)"})
+        except Exception as e:
+            debug.append({'fichier': item.get('name', '?'), 'statut': f"❌ Erreur de lecture : {e}"})
             continue
 
-    return pd.DataFrame(lignes) if lignes else None
+    return (pd.DataFrame(lignes) if lignes else None), debug
 
 
 # --- LISTE EXPLICITE DES CODES 4-PACK À DOUBLER ---
@@ -373,7 +442,7 @@ def corriger_sku_sans_alcool(row):
     return name
 
 # --- AFFICHAGE D'UNE SECTION DÉDIÉE À UN CANAL (CAD / CSP / Keg Access) ---
-def render_section_canal(df_canal, titre, icone, date_range):
+def render_section_canal(df_canal, titre, icone, date_range, debug_info=None):
     """
     Affiche une section autonome pour un canal de vente donné.
     Ne touche à aucune donnée du pipeline ERP principal — totalement indépendant.
@@ -382,9 +451,17 @@ def render_section_canal(df_canal, titre, icone, date_range):
     st.header(f"{icone} {titre}")
 
     if df_canal is None or df_canal.empty:
-        st.info(f"Aucune donnée trouvée pour « {titre} ». Vérifiez que le dossier Drive est bien configuré "
-                f"(ID renseigné + accès partagé avec le compte de service) et qu'il contient des fichiers.")
+        st.info(f"Aucune donnée trouvée pour « {titre} ».")
+        if debug_info:
+            with st.expander("🔍 Diagnostic (pourquoi aucune donnée ?)", expanded=True):
+                st.dataframe(pd.DataFrame(debug_info), use_container_width=True, hide_index=True)
+        else:
+            st.caption("Vérifiez que le dossier Drive est bien configuré (ID renseigné + accès partagé avec le compte de service) et qu'il contient des fichiers.")
         return
+
+    if debug_info:
+        with st.expander("🔍 Diagnostic des fichiers chargés"):
+            st.dataframe(pd.DataFrame(debug_info), use_container_width=True, hide_index=True)
 
     df_c = df_canal.copy()
     df_c['DocDate'] = pd.to_datetime(df_c['DocDate'], errors='coerce')
@@ -494,11 +571,13 @@ if df_raw_all is not None:
     # pour éviter tout risque de double comptage si ces ventes sont aussi déjà
     # présentes dans l'export ERP. Ils sont affichés dans leurs propres sections
     # plus bas dans la page plutôt que mélangés aux totaux/graphiques existants.
-    df_cad, df_csp, df_keg = None, None, None
+    df_cad, debug_cad = None, None
+    df_csp, debug_csp = None, None
+    df_keg, debug_keg = None, None
     if page == "Alchimiste":
-        df_cad = load_ventes_reseau_from_drive(ID_DOSSIER_VENTES_CAD)
-        df_csp = load_ventes_reseau_from_drive(ID_DOSSIER_VENTES_CSP)
-        df_keg = load_keg_access_from_drive(ID_DOSSIER_KEG_ACCESS)
+        df_cad, debug_cad = load_ventes_reseau_from_drive(ID_DOSSIER_VENTES_CAD)
+        df_csp, debug_csp = load_ventes_reseau_from_drive(ID_DOSSIER_VENTES_CSP)
+        df_keg, debug_keg = load_keg_access_from_drive(ID_DOSSIER_KEG_ACCESS)
 
     # --- PRÉ-TRAITEMENT DES DATES ---
     df_raw_all['DocDate'] = pd.to_datetime(df_raw_all['DocDate'], errors='coerce')
@@ -720,9 +799,9 @@ if df_raw_all is not None:
 
     # --- SECTIONS INDÉPENDANTES PAR CANAL (CAD / CSP / Courtier) ---
     if page == "Alchimiste":
-        render_section_canal(df_cad, "Ventes locales CAD", "🏠", date_sel)
-        render_section_canal(df_csp, "Ventes locales CSP", "🏠", date_sel)
-        render_section_canal(df_keg, "Ventes via courtier (Keg Access)", "🤝", date_sel)
+        render_section_canal(df_cad, "Ventes locales CAD", "🏠", date_sel, debug_cad)
+        render_section_canal(df_csp, "Ventes locales CSP", "🏠", date_sel, debug_csp)
+        render_section_canal(df_keg, "Ventes via courtier (Keg Access)", "🤝", date_sel, debug_keg)
 
 else:
     st.error("Données introuvables. Vérifiez vos dossiers Drive.")
