@@ -810,48 +810,8 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
                     f = fmt_perc if 'Variation %' in str(col) else (fmt_money if is_money else fmt_qty)
                     ws.set_column(excel_col, excel_col, 20, f)
 
-        def save_sheet_canal(df_canal, name):
-            """Onglet dédié à un canal (CAD / CSP / Keg Access) : détail SKU + détail client."""
-            if df_canal is None or df_canal.empty:
-                pd.DataFrame({'Info': [f"Aucune donnée disponible pour {name}."]}).to_excel(
-                    writer, sheet_name=name, index=False
-                )
-                return
-
-            df_c = df_canal.copy()
-            df_c['Gamme'] = df_c['ItemName'].apply(get_gamme)
-            df_c = df_c.rename(columns={'CAISSE_EQ_PRECALC': 'Caisse Eq.'})
-
-            sku_tbl = (
-                df_c.groupby(['ItemName', 'Gamme'])
-                .agg({'Caisse Eq.': 'sum', 'LineTotal': 'sum'})
-                .reset_index()
-                .rename(columns={'ItemName': 'SKU', 'LineTotal': 'Ventes ($)'})
-                .sort_values('Ventes ($)', ascending=False)
-            )
-            sku_tbl.loc[len(sku_tbl)] = ['TOTAL', '', sku_tbl['Caisse Eq.'].sum(), sku_tbl['Ventes ($)'].sum()]
-
-            sku_tbl.to_excel(writer, sheet_name=name, startrow=1, index=False)
-            ws = writer.sheets[name]
-            ws.write(0, 0, "Détail par SKU", fmt_titre)
-            ws.set_column(0, 0, 42)
-            ws.set_column(1, 1, 16, fmt_text)
-            ws.set_column(2, 2, 16, fmt_qty)
-            ws.set_column(3, 3, 18, fmt_money)
-
-            client_tbl = (
-                df_c.groupby('CardName')
-                .agg({'Caisse Eq.': 'sum', 'LineTotal': 'sum'})
-                .reset_index()
-                .rename(columns={'CardName': 'Client', 'LineTotal': 'Ventes ($)'})
-                .sort_values('Ventes ($)', ascending=False)
-            )
-            start_row = len(sku_tbl) + 4
-            ws.write(start_row, 0, "Détail par client", fmt_titre)
-            client_tbl.to_excel(writer, sheet_name=name, startrow=start_row + 1, index=False)
-
         def save_sheet_yoy(df_canal, name):
-            """Onglet YOY : comparaison par SKU entre l'année précédente et l'année en cours."""
+            """Onglet YOY : comparaison par SKU entre l'année précédente et l'année en cours, alignée au même jour de l'année (YTD vs YTD) pour une comparaison juste."""
             annee_actuelle = date.today().year
             annee_prec = annee_actuelle - 1
 
@@ -864,15 +824,20 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
             df_c = df_canal.copy()
             df_c['DocDate'] = pd.to_datetime(df_c['DocDate'], errors='coerce')
             df_c['Année'] = df_c['DocDate'].dt.year
+            df_c['Jour_Annee'] = df_c['DocDate'].dt.dayofyear
             df_c = df_c.rename(columns={'CAISSE_EQ_PRECALC': 'Caisse Eq.'})
 
             df_act = df_c[df_c['Année'] == annee_actuelle]
-            df_prc = df_c[df_c['Année'] == annee_prec]
+            # Aligné au même jour de l'année que les données actuelles les plus récentes,
+            # pour comparer des périodes équivalentes (ex: si on n'a que jusqu'au 13 juillet
+            # en 2026, on compare au 1er janvier - 13 juillet 2025, pas à l'année 2025 complète)
+            max_jour = df_act['Jour_Annee'].max() if not df_act.empty else 366
+            df_prc = df_c[(df_c['Année'] == annee_prec) & (df_c['Jour_Annee'] <= max_jour)]
 
-            col_c_prec = f'Caisses {annee_prec}'
-            col_c_act = f'Caisses {annee_actuelle}'
-            col_v_prec = f'Ventes {annee_prec} ($)'
-            col_v_act = f'Ventes {annee_actuelle} ($)'
+            col_c_prec = f'Caisses {annee_prec} (YTD)'
+            col_c_act = f'Caisses {annee_actuelle} (YTD)'
+            col_v_prec = f'Ventes {annee_prec} (YTD) ($)'
+            col_v_act = f'Ventes {annee_actuelle} (YTD) ($)'
 
             tbl = pd.DataFrame({
                 col_c_prec: df_prc.groupby('ItemName')['Caisse Eq.'].sum(),
@@ -892,8 +857,9 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
             tbl = tbl.sort_values(col_v_act, ascending=False).reset_index().rename(columns={'ItemName': 'SKU'})
             tbl.loc[len(tbl)] = ['TOTAL'] + [tbl[c].sum() for c in tbl.columns if c != 'SKU']
 
-            tbl.to_excel(writer, sheet_name=name, index=False)
+            tbl.to_excel(writer, sheet_name=name, startrow=1, index=False)
             ws = writer.sheets[name]
+            ws.write(0, 0, f"Comparaison YTD — jusqu'au jour {int(max_jour)} de l'année (2025 vs 2026)", fmt_titre)
             ws.set_column(0, 0, 42)
             for i, col in enumerate(tbl.columns):
                 if 'Ventes' in col:
@@ -969,11 +935,8 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
         save_sheet(pivot_val,    'Dollars Mensuels YOY',is_money=True, add_row_total=False, with_gamme=False)
         # Bannières — index = GroupName, pas de Gamme
         save_sheet(pivot_banner, 'Bannières 2026',      add_row_total=True,  with_gamme=False)
-        # Onglets par canal (CAD / CSP / Keg Access) — un onglet distinct chacun
+        # Onglets par canal (CAD / CSP / Keg Access)
         if df_cad is not None or df_csp is not None or df_keg is not None:
-            save_sheet_canal(df_cad, 'Ventes CAD')
-            save_sheet_canal(df_csp, 'Ventes CSP')
-            save_sheet_canal(df_keg, 'Keg Access')
             save_sheet_combine(df_erp, df_cad, df_csp, df_keg)
 
             # Onglets YOY — un par canal + un cumulatif (CAD + CSP + Keg Access, sans Ventes CDL)
