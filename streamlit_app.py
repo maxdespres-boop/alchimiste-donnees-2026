@@ -156,7 +156,13 @@ def load_ventes_reseau_from_drive(folder_id):
     debug = []
     try:
         query = f"'{folder_id}' in parents and trashed = false"
-        items = service.files().list(q=query, fields="files(id, name, mimeType, modifiedTime)").execute().get('files', [])
+        items = service.files().list(
+            q=query,
+            fields="files(id, name, mimeType, modifiedTime)",
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
+            corpora='allDrives',
+        ).execute().get('files', [])
     except Exception as e:
         return None, [{'fichier': '(accès dossier)', 'statut': f"❌ Erreur d'accès au dossier Drive : {e}"}]
 
@@ -258,7 +264,13 @@ def load_keg_access_from_drive(folder_id):
     debug = []
     try:
         query = f"'{folder_id}' in parents and trashed = false"
-        items = service.files().list(q=query, fields="files(id, name, mimeType, modifiedTime)").execute().get('files', [])
+        items = service.files().list(
+            q=query,
+            fields="files(id, name, mimeType, modifiedTime)",
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
+            corpora='allDrives',
+        ).execute().get('files', [])
     except Exception as e:
         return None, [{'fichier': '(accès dossier)', 'statut': f"❌ Erreur d'accès au dossier Drive : {e}"}]
 
@@ -562,6 +574,9 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
 
 # --- MAIN APP ---
 st.sidebar.title("🍺 Navigation Master")
+if st.sidebar.button("🔄 Forcer le rechargement des données (vider le cache)"):
+    st.cache_data.clear()
+    st.rerun()
 page = st.sidebar.radio("Marque :", ["Alchimiste", "LOOP"])
 df_raw_all = load_data_from_drive(ID_DOSSIER_ALCHIMISTE if page == "Alchimiste" else ID_DOSSIER_LOOP)
 
