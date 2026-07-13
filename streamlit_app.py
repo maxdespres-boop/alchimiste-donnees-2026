@@ -703,7 +703,7 @@ def corriger_sku_sans_alcool(row):
 def render_section_canal(df_canal, titre, icone, date_range, debug_info=None):
     """
     Affiche une section autonome pour un canal de vente donné.
-    Ne touche à aucune donnée du pipeline ERP principal — totalement indépendant.
+    Ne touche à aucune donnée du pipeline principal (Ventes CDL) — totalement indépendant.
     """
     st.divider()
     st.header(f"{icone} {titre}")
@@ -850,15 +850,66 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
             ws.write(start_row, 0, "Détail par client", fmt_titre)
             client_tbl.to_excel(writer, sheet_name=name, startrow=start_row + 1, index=False)
 
+        def save_sheet_yoy(df_canal, name):
+            """Onglet YOY : comparaison par SKU entre l'année précédente et l'année en cours."""
+            annee_actuelle = date.today().year
+            annee_prec = annee_actuelle - 1
+
+            if df_canal is None or df_canal.empty:
+                pd.DataFrame({'Info': [f"Aucune donnée disponible pour {name}."]}).to_excel(
+                    writer, sheet_name=name, index=False
+                )
+                return
+
+            df_c = df_canal.copy()
+            df_c['DocDate'] = pd.to_datetime(df_c['DocDate'], errors='coerce')
+            df_c['Année'] = df_c['DocDate'].dt.year
+            df_c = df_c.rename(columns={'CAISSE_EQ_PRECALC': 'Caisse Eq.'})
+
+            df_act = df_c[df_c['Année'] == annee_actuelle]
+            df_prc = df_c[df_c['Année'] == annee_prec]
+
+            col_c_prec = f'Caisses {annee_prec}'
+            col_c_act = f'Caisses {annee_actuelle}'
+            col_v_prec = f'Ventes {annee_prec} ($)'
+            col_v_act = f'Ventes {annee_actuelle} ($)'
+
+            tbl = pd.DataFrame({
+                col_c_prec: df_prc.groupby('ItemName')['Caisse Eq.'].sum(),
+                col_c_act: df_act.groupby('ItemName')['Caisse Eq.'].sum(),
+                col_v_prec: df_prc.groupby('ItemName')['LineTotal'].sum(),
+                col_v_act: df_act.groupby('ItemName')['LineTotal'].sum(),
+            }).fillna(0)
+
+            if tbl.empty:
+                pd.DataFrame({'Info': [f"Aucune donnée pour {annee_prec} ou {annee_actuelle}."]}).to_excel(
+                    writer, sheet_name=name, index=False
+                )
+                return
+
+            tbl['Var. Caisses'] = tbl[col_c_act] - tbl[col_c_prec]
+            tbl['Var. Ventes ($)'] = tbl[col_v_act] - tbl[col_v_prec]
+            tbl = tbl.sort_values(col_v_act, ascending=False).reset_index().rename(columns={'ItemName': 'SKU'})
+            tbl.loc[len(tbl)] = ['TOTAL'] + [tbl[c].sum() for c in tbl.columns if c != 'SKU']
+
+            tbl.to_excel(writer, sheet_name=name, index=False)
+            ws = writer.sheets[name]
+            ws.set_column(0, 0, 42)
+            for i, col in enumerate(tbl.columns):
+                if 'Ventes' in col:
+                    ws.set_column(i, i, 18, fmt_money)
+                elif col != 'SKU':
+                    ws.set_column(i, i, 16, fmt_qty)
+
         def save_sheet_combine(df_erp, df_cad, df_csp, df_keg, name='Toutes Ventes par SKU'):
-            """Onglet combiné : total par SKU tous canaux confondus (ERP + CAD + CSP + Keg Access), année en cours."""
+            """Onglet combiné : total par SKU tous canaux confondus (CDL + CAD + CSP + Keg Access), année en cours."""
             frames = []
 
             if df_erp is not None and not df_erp.empty and {'ItemName', 'CAISSE EQ', 'LineTotal'}.issubset(df_erp.columns):
                 t = df_erp[['ItemName', 'CAISSE EQ', 'LineTotal']].rename(
                     columns={'CAISSE EQ': 'Caisse Eq.', 'LineTotal': 'Ventes ($)'}
                 )
-                t['Canal'] = 'ERP'
+                t['Canal'] = 'CDL'
                 frames.append(t)
 
             for df_x, label in [(df_cad, 'CAD'), (df_csp, 'CSP'), (df_keg, 'Keg Access')]:
@@ -924,6 +975,14 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
             save_sheet_canal(df_csp, 'Ventes CSP')
             save_sheet_canal(df_keg, 'Keg Access')
             save_sheet_combine(df_erp, df_cad, df_csp, df_keg)
+
+            # Onglets YOY — un par canal + un cumulatif (CAD + CSP + Keg Access, sans Ventes CDL)
+            save_sheet_yoy(df_cad, 'YOY CAD')
+            save_sheet_yoy(df_csp, 'YOY CSP')
+            save_sheet_yoy(df_keg, 'YOY Keg Access')
+            frames_cumul = [d for d in [df_cad, df_csp, df_keg] if d is not None and not d.empty]
+            df_cumul = pd.concat(frames_cumul, ignore_index=True, sort=False) if frames_cumul else None
+            save_sheet_yoy(df_cumul, 'YOY Cumulatif')
     return output.getvalue()
 
 # --- MAIN APP ---
@@ -936,9 +995,9 @@ df_raw_all = load_data_from_drive(ID_DOSSIER_ALCHIMISTE if page == "Alchimiste" 
 
 if df_raw_all is not None:
     # --- CHARGEMENT DES 3 CANAUX SUPPLÉMENTAIRES (Alchimiste seulement) ---
-    # NOTE : ces canaux sont volontairement gardés SÉPARÉS du pipeline ERP (df_raw_all)
+    # NOTE : ces canaux sont volontairement gardés SÉPARÉS du pipeline Ventes CDL (df_raw_all)
     # pour éviter tout risque de double comptage si ces ventes sont aussi déjà
-    # présentes dans l'export ERP. Ils sont affichés dans leurs propres sections
+    # présentes dans l'export CDL. Ils sont affichés dans leurs propres sections
     # plus bas dans la page plutôt que mélangés aux totaux/graphiques existants.
     df_cad, debug_cad = None, None
     df_csp, debug_csp = None, None
