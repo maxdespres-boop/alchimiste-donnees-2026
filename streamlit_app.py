@@ -368,6 +368,59 @@ if df_raw_all is not None:
         client_data = df_filtered.groupby('CardName')['CAISSE EQ'].sum().reset_index().sort_values('CAISSE EQ', ascending=False).head(15)
         st.dataframe(client_data.rename(columns={'CardName':'Client','CAISSE EQ':'Caisses'}), use_container_width=True, hide_index=True)
 
+    # --- VENTES PAR VILLE ---
+st.divider()
+col_left_ville, col_right_ville = st.columns(2)
+
+with col_left_ville:
+    st.header("🏙️ Top Villes (Volume)")
+    if 'CityS' in df_filtered.columns:
+        city_data_vol = df_filtered.groupby('CityS')['CAISSE EQ'].sum().reset_index().sort_values('CAISSE EQ', ascending=False).head(15)
+        st.plotly_chart(
+            px.bar(city_data_vol, x='CityS', y='CAISSE EQ', 
+                   labels={'CityS': 'Ville', 'CAISSE EQ': 'Caisses équivalentes'},
+                   title="Top 15 Villes par volume de caisses",
+                   color='CAISSE EQ',
+                   color_continuous_scale='Blues'),
+            use_container_width=True
+        )
+
+with col_right_ville:
+    st.header("💰 Top Villes (Ventes)")
+    if 'CityS' in df_filtered.columns:
+        city_data_val = df_filtered.groupby('CityS')['LineTotal'].sum().reset_index().sort_values('LineTotal', ascending=False).head(15)
+        st.plotly_chart(
+            px.bar(city_data_val, x='CityS', y='LineTotal', 
+                   labels={'CityS': 'Ville', 'LineTotal': 'Ventes ($)'},
+                   title="Top 15 Villes par ventes en dollars",
+                   color='LineTotal',
+                   color_continuous_scale='Greens'),
+            use_container_width=True
+        )
+
+# --- Tableau détaillé par ville ---
+st.subheader("📊 Détail complet par ville")
+if 'CityS' in df_filtered.columns:
+    city_detail = df_filtered.groupby('CityS').agg({
+        'CAISSE EQ': 'sum',
+        'LineTotal': 'sum'
+    }).reset_index().sort_values('LineTotal', ascending=False)
+    
+    city_detail = city_detail.rename(columns={
+        'CityS': 'Ville',
+        'CAISSE EQ': 'Caisses',
+        'LineTotal': 'Ventes ($)'
+    })
+    
+    st.dataframe(
+        city_detail.style.format({
+            'Caisses': '{:,.2f}',
+            'Ventes ($)': '{:,.2f} $'
+        }),
+        use_container_width=True,
+        hide_index=True
+    )
+    
     # --- COMPARISON SKU YOY (BAS DE PAGE) ---
     st.divider()
     st.header("📦 Comparaison par SKU (YTD)")
