@@ -145,7 +145,7 @@ def corriger_sku_sans_alcool(row):
     return name
 
 # --- EXCEL PRO ---
-def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_banner):
+def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_banner, df_raw):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         workbook = writer.book
@@ -156,14 +156,13 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
 
         def save_sheet(df, name, is_money=False, add_row_total=True, with_gamme=False):
             df_t = df.copy()
-            # Injecter colonne Gamme en 1ère position (avant les données)
             if with_gamme:
                 df_t.insert(0, 'Gamme', df_t.index.map(get_gamme))
             if add_row_total:
                 df_t.loc['TOTAL GLOBAL'] = df_t.sum(numeric_only=True)
             df_t.to_excel(writer, sheet_name=name)
             ws = writer.sheets[name]
-            ws.set_column(0, 0, 42)  # colonne index (ItemName)
+            ws.set_column(0, 0, 42)
             for i, col in enumerate(df_t.columns):
                 excel_col = i + 1
                 if col == 'Gamme':
@@ -172,14 +171,40 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
                     f = fmt_perc if 'Variation %' in str(col) else (fmt_money if is_money else fmt_qty)
                     ws.set_column(excel_col, excel_col, 20, f)
 
-        # Onglets SKU — colonne Gamme ajoutée
+        # Onglets existants
         save_sheet(df_week_comp, 'Comparaison Semaine', add_row_total=True,  with_gamme=True)
         save_sheet(pivot_sku,    'Détail SKU 2026',     add_row_total=True,  with_gamme=True)
-        # Onglets mensuels — index = Mois_Nom, pas de Gamme
         save_sheet(pivot_vol,    'Vol Mensuel YOY',     add_row_total=False, with_gamme=False)
         save_sheet(pivot_val,    'Dollars Mensuels YOY',is_money=True, add_row_total=False, with_gamme=False)
-        # Bannières — index = GroupName, pas de Gamme
         save_sheet(pivot_banner, 'Bannières 2026',      add_row_total=True,  with_gamme=False)
+        
+        # --- NOUVEAUX ONGLETS ROLLING ---
+        today = pd.Timestamp.now().date()
+        
+        # Rolling 4 semaines
+        date_4w = today - timedelta(days=28)
+        df_4w = df_raw[(df_raw['DateAnalyse'].dt.date >= date_4w) & (df_raw['DateAnalyse'].dt.date <= today)]
+        rolling_4w = df_4w.groupby('ItemName').agg({'CAISSE EQ': 'sum', 'LineTotal': 'sum'}).fillna(0)
+        rolling_4w.columns = ['Caisses', 'Ventes ($)']
+        rolling_4w = rolling_4w.sort_values('Ventes ($)', ascending=False)
+        save_sheet(rolling_4w, 'Rolling 4 semaines', is_money=False, add_row_total=True, with_gamme=True)
+        
+        # Rolling 3 mois
+        date_3m = today - timedelta(days=90)
+        df_3m = df_raw[(df_raw['DateAnalyse'].dt.date >= date_3m) & (df_raw['DateAnalyse'].dt.date <= today)]
+        rolling_3m = df_3m.groupby('ItemName').agg({'CAISSE EQ': 'sum', 'LineTotal': 'sum'}).fillna(0)
+        rolling_3m.columns = ['Caisses', 'Ventes ($)']
+        rolling_3m = rolling_3m.sort_values('Ventes ($)', ascending=False)
+        save_sheet(rolling_3m, 'Rolling 3 mois', is_money=False, add_row_total=True, with_gamme=True)
+        
+        # Rolling 12 mois
+        date_12m = today - timedelta(days=365)
+        df_12m = df_raw[(df_raw['DateAnalyse'].dt.date >= date_12m) & (df_raw['DateAnalyse'].dt.date <= today)]
+        rolling_12m = df_12m.groupby('ItemName').agg({'CAISSE EQ': 'sum', 'LineTotal': 'sum'}).fillna(0)
+        rolling_12m.columns = ['Caisses', 'Ventes ($)']
+        rolling_12m = rolling_12m.sort_values('Ventes ($)', ascending=False)
+        save_sheet(rolling_12m, 'Rolling 12 mois', is_money=False, add_row_total=True, with_gamme=True)
+
     return output.getvalue()
 
 # --- MAIN APP ---
@@ -348,7 +373,7 @@ if df_raw_all is not None:
     pivot_sku_xls = df_2026_full.pivot_table(index='ItemName', columns='Mois_Nom', values='CAISSE EQ', aggfunc='sum').fillna(0)
     pivot_banner_xls = df_2026_full.groupby('GroupName')['CAISSE EQ'].sum().to_frame()
 
-    excel_file = generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku_xls, pivot_banner_xls)
+    excel_file = generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku_xls, pivot_banner_xls, df_raw)
     st.sidebar.download_button(f"📥 Télécharger Rapport {page} (Excel)", data=excel_file, file_name=f"Rapport_{page}_{date.today()}.xlsx")
 
     # --- TOP BANNIÈRES ET CLIENTS ---
