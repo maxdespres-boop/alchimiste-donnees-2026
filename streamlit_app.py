@@ -65,6 +65,7 @@ GAMME_RULES = [
     ('SANS GLUTEN',         'Sans Gluten'),
     # Sans Alcool
     ('SANS ALCOOL',         'Sans Alcool'),
+    ('S/A',                 'Sans Alcool'),
     # 4 Pack (standalone, pas Vilains ni Authentique)
     ('4 PACK',              '4 Pack'),
     # Quatuor
@@ -88,11 +89,15 @@ GAMME_RULES = [
     ('PÊCHE',               'Autre'),
     ('PECHE',               'Autre'),
     ('TOKYO',               'Autre'),
-    # Projet Tropical : Autre si 4 pack (règle 4 PACK déjà capturée plus haut),
-    # Vilains si caisse de 12 — on arrive ici seulement si "4 PACK" n'a pas matché
+    ('SURE FRAMBOISE',      'Autre'),
+    ('SURE FRAMBOIS',       'Autre'),
+    # Projet Tropical
     ('PROJET TROPIC',       'Vilains'),
     ('PROJET TROPICAL',     'Vilains'),
-    # Authentique — tout le reste de la gamme principale
+    # Authentique — gamme principale (LA = Authentique)
+    ('LA ROUSSE',           'Authentique'),
+    ('LA BITTER',           'Authentique'),
+    ('LA GOSE',             'Authentique'),
     ('BOCK',                'Authentique'),
     ('BLONDE',              'Authentique'),
     ('DRY STOUT',           'Authentique'),
@@ -104,7 +109,6 @@ GAMME_RULES = [
     ('GOSE',                'Authentique'),
     ('ROUSSE',              'Authentique'),
     ('PALE ALE',            'Authentique'),
-    ('SURE FRAMBOISE',      'Authentique'),
 ]
 
 
@@ -178,32 +182,44 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
         save_sheet(pivot_val,    'Dollars Mensuels YOY',is_money=True, add_row_total=False, with_gamme=False)
         save_sheet(pivot_banner, 'Bannières 2026',      add_row_total=True,  with_gamme=False)
         
-        # --- NOUVEAUX ONGLETS ROLLING ---
+        # --- NOUVEAUX ONGLETS ROLLING AVEC YOY ---
         today = pd.Timestamp.now().date()
-        
-        # Rolling 4 semaines
+
+        # Rolling 4 semaines — comparaison 2025 vs 2026
         date_4w = today - timedelta(days=28)
-        df_4w = df_raw[(df_raw['DateAnalyse'].dt.date >= date_4w) & (df_raw['DateAnalyse'].dt.date <= today)]
-        rolling_4w = df_4w.groupby('ItemName').agg({'CAISSE EQ': 'sum', 'LineTotal': 'sum'}).fillna(0)
-        rolling_4w.columns = ['Caisses', 'Ventes ($)']
-        rolling_4w = rolling_4w.sort_values('Ventes ($)', ascending=False)
-        save_sheet(rolling_4w, 'Rolling 4 semaines', is_money=False, add_row_total=True, with_gamme=True)
-        
-        # Rolling 3 mois
+        df_4w_2026 = df_raw[(df_raw['Année'] == 2026) & (df_raw['DateAnalyse'].dt.date >= date_4w) & (df_raw['DateAnalyse'].dt.date <= today)]
+        df_4w_2025 = df_raw[(df_raw['Année'] == 2025) & (df_raw['DateAnalyse'].dt.date >= date_4w) & (df_raw['DateAnalyse'].dt.date <= today)]
+
+        rolling_4w_26 = df_4w_2026.groupby('ItemName')['CAISSE EQ'].sum()
+        rolling_4w_25 = df_4w_2025.groupby('ItemName')['CAISSE EQ'].sum()
+        rolling_4w = pd.DataFrame({'2025 (4w)': rolling_4w_25, '2026 (4w)': rolling_4w_26}).fillna(0)
+        rolling_4w['Var. Absolue'] = rolling_4w['2026 (4w)'] - rolling_4w['2025 (4w)']
+        rolling_4w['Variation %'] = (rolling_4w['Var. Absolue'] / rolling_4w['2025 (4w)'].replace(0, 1))
+        save_sheet(rolling_4w, 'Rolling 4 semaines', is_money=False, add_row_total=False, with_gamme=True)
+
+        # Rolling 3 mois — comparaison 2025 vs 2026
         date_3m = today - timedelta(days=90)
-        df_3m = df_raw[(df_raw['DateAnalyse'].dt.date >= date_3m) & (df_raw['DateAnalyse'].dt.date <= today)]
-        rolling_3m = df_3m.groupby('ItemName').agg({'CAISSE EQ': 'sum', 'LineTotal': 'sum'}).fillna(0)
-        rolling_3m.columns = ['Caisses', 'Ventes ($)']
-        rolling_3m = rolling_3m.sort_values('Ventes ($)', ascending=False)
-        save_sheet(rolling_3m, 'Rolling 3 mois', is_money=False, add_row_total=True, with_gamme=True)
-        
-        # Rolling 12 mois
+        df_3m_2026 = df_raw[(df_raw['Année'] == 2026) & (df_raw['DateAnalyse'].dt.date >= date_3m) & (df_raw['DateAnalyse'].dt.date <= today)]
+        df_3m_2025 = df_raw[(df_raw['Année'] == 2025) & (df_raw['DateAnalyse'].dt.date >= date_3m) & (df_raw['DateAnalyse'].dt.date <= today)]
+
+        rolling_3m_26 = df_3m_2026.groupby('ItemName')['CAISSE EQ'].sum()
+        rolling_3m_25 = df_3m_2025.groupby('ItemName')['CAISSE EQ'].sum()
+        rolling_3m = pd.DataFrame({'2025 (3m)': rolling_3m_25, '2026 (3m)': rolling_3m_26}).fillna(0)
+        rolling_3m['Var. Absolue'] = rolling_3m['2026 (3m)'] - rolling_3m['2025 (3m)']
+        rolling_3m['Variation %'] = (rolling_3m['Var. Absolue'] / rolling_3m['2025 (3m)'].replace(0, 1))
+        save_sheet(rolling_3m, 'Rolling 3 mois', is_money=False, add_row_total=False, with_gamme=True)
+
+        # Rolling 12 mois — comparaison 2025 vs 2026
         date_12m = today - timedelta(days=365)
-        df_12m = df_raw[(df_raw['DateAnalyse'].dt.date >= date_12m) & (df_raw['DateAnalyse'].dt.date <= today)]
-        rolling_12m = df_12m.groupby('ItemName').agg({'CAISSE EQ': 'sum', 'LineTotal': 'sum'}).fillna(0)
-        rolling_12m.columns = ['Caisses', 'Ventes ($)']
-        rolling_12m = rolling_12m.sort_values('Ventes ($)', ascending=False)
-        save_sheet(rolling_12m, 'Rolling 12 mois', is_money=False, add_row_total=True, with_gamme=True)
+        df_12m_2026 = df_raw[(df_raw['Année'] == 2026) & (df_raw['DateAnalyse'].dt.date >= date_12m) & (df_raw['DateAnalyse'].dt.date <= today)]
+        df_12m_2025 = df_raw[(df_raw['Année'] == 2025) & (df_raw['DateAnalyse'].dt.date >= date_12m) & (df_raw['DateAnalyse'].dt.date <= today)]
+
+        rolling_12m_26 = df_12m_2026.groupby('ItemName')['CAISSE EQ'].sum()
+        rolling_12m_25 = df_12m_2025.groupby('ItemName')['CAISSE EQ'].sum()
+        rolling_12m = pd.DataFrame({'2025 (12m)': rolling_12m_25, '2026 (12m)': rolling_12m_26}).fillna(0)
+        rolling_12m['Var. Absolue'] = rolling_12m['2026 (12m)'] - rolling_12m['2025 (12m)']
+        rolling_12m['Variation %'] = (rolling_12m['Var. Absolue'] / rolling_12m['2025 (12m)'].replace(0, 1))
+        save_sheet(rolling_12m, 'Rolling 12 mois', is_money=False, add_row_total=False, with_gamme=True)
 
     return output.getvalue()
 
