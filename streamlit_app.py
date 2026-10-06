@@ -183,37 +183,38 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
         save_sheet(pivot_banner, 'Bannières 2026',      add_row_total=True,  with_gamme=False)
         
         # --- NOUVEAUX ONGLETS ROLLING AVEC YOY ---
+        # Utiliser Jour_Annee pour comparer le même jour de l'année entre 2025 et 2026
         today = pd.Timestamp.now().date()
-
-        # Rolling 4 semaines — comparaison 2025 vs 2026
-        date_4w = today - timedelta(days=28)
-        df_4w_2026 = df_raw[(df_raw['Année'] == 2026) & (df_raw['DateAnalyse'].dt.date >= date_4w) & (df_raw['DateAnalyse'].dt.date <= today)]
-        df_4w_2025 = df_raw[(df_raw['Année'] == 2025) & (df_raw['DateAnalyse'].dt.date >= date_4w) & (df_raw['DateAnalyse'].dt.date <= today)]
-
+        today_doy = pd.Timestamp(today).dayofyear  # Jour de l'année (1-366)
+        
+        # Rolling 4 semaines — jour_annee actuel vs 28 jours avant
+        min_doy_4w = max(1, today_doy - 28)
+        df_4w_2026 = df_raw[(df_raw['Année'] == 2026) & (df_raw['Jour_Annee'] >= min_doy_4w) & (df_raw['Jour_Annee'] <= today_doy)]
+        df_4w_2025 = df_raw[(df_raw['Année'] == 2025) & (df_raw['Jour_Annee'] >= min_doy_4w) & (df_raw['Jour_Annee'] <= today_doy)]
+        
         rolling_4w_26 = df_4w_2026.groupby('ItemName')['CAISSE EQ'].sum()
         rolling_4w_25 = df_4w_2025.groupby('ItemName')['CAISSE EQ'].sum()
         rolling_4w = pd.DataFrame({'2025 (4w)': rolling_4w_25, '2026 (4w)': rolling_4w_26}).fillna(0)
         rolling_4w['Var. Absolue'] = rolling_4w['2026 (4w)'] - rolling_4w['2025 (4w)']
         rolling_4w['Variation %'] = (rolling_4w['Var. Absolue'] / rolling_4w['2025 (4w)'].replace(0, 1))
         save_sheet(rolling_4w, 'Rolling 4 semaines', is_money=False, add_row_total=False, with_gamme=True)
-
-        # Rolling 3 mois — comparaison 2025 vs 2026
-        date_3m = today - timedelta(days=90)
-        df_3m_2026 = df_raw[(df_raw['Année'] == 2026) & (df_raw['DateAnalyse'].dt.date >= date_3m) & (df_raw['DateAnalyse'].dt.date <= today)]
-        df_3m_2025 = df_raw[(df_raw['Année'] == 2025) & (df_raw['DateAnalyse'].dt.date >= date_3m) & (df_raw['DateAnalyse'].dt.date <= today)]
-
+        
+        # Rolling 3 mois — jour_annee actuel vs 90 jours avant
+        min_doy_3m = max(1, today_doy - 90)
+        df_3m_2026 = df_raw[(df_raw['Année'] == 2026) & (df_raw['Jour_Annee'] >= min_doy_3m) & (df_raw['Jour_Annee'] <= today_doy)]
+        df_3m_2025 = df_raw[(df_raw['Année'] == 2025) & (df_raw['Jour_Annee'] >= min_doy_3m) & (df_raw['Jour_Annee'] <= today_doy)]
+        
         rolling_3m_26 = df_3m_2026.groupby('ItemName')['CAISSE EQ'].sum()
         rolling_3m_25 = df_3m_2025.groupby('ItemName')['CAISSE EQ'].sum()
         rolling_3m = pd.DataFrame({'2025 (3m)': rolling_3m_25, '2026 (3m)': rolling_3m_26}).fillna(0)
         rolling_3m['Var. Absolue'] = rolling_3m['2026 (3m)'] - rolling_3m['2025 (3m)']
         rolling_3m['Variation %'] = (rolling_3m['Var. Absolue'] / rolling_3m['2025 (3m)'].replace(0, 1))
         save_sheet(rolling_3m, 'Rolling 3 mois', is_money=False, add_row_total=False, with_gamme=True)
-
-        # Rolling 12 mois — comparaison 2025 vs 2026
-        date_12m = today - timedelta(days=365)
-        df_12m_2026 = df_raw[(df_raw['Année'] == 2026) & (df_raw['DateAnalyse'].dt.date >= date_12m) & (df_raw['DateAnalyse'].dt.date <= today)]
-        df_12m_2025 = df_raw[(df_raw['Année'] == 2025) & (df_raw['DateAnalyse'].dt.date >= date_12m) & (df_raw['DateAnalyse'].dt.date <= today)]
-
+        
+        # Rolling 12 mois — entire YTD (depuis jour 1 jusqu'au jour_annee actuel)
+        df_12m_2026 = df_raw[(df_raw['Année'] == 2026) & (df_raw['Jour_Annee'] <= today_doy)]
+        df_12m_2025 = df_raw[(df_raw['Année'] == 2025) & (df_raw['Jour_Annee'] <= today_doy)]
+        
         rolling_12m_26 = df_12m_2026.groupby('ItemName')['CAISSE EQ'].sum()
         rolling_12m_25 = df_12m_2025.groupby('ItemName')['CAISSE EQ'].sum()
         rolling_12m = pd.DataFrame({'2025 (12m)': rolling_12m_25, '2026 (12m)': rolling_12m_26}).fillna(0)
