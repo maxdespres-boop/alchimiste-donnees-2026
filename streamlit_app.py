@@ -57,6 +57,11 @@ CODES_4PACK = {
     'MAROUSG4P',
 }
 
+# --- CODES QUI SONT DÉJÀ EN 12 EQ (ne pas doubler) ---
+CODES_ALREADY_12EQ = {
+    'MABSGU',  # ULTRA BLONDE (Sans Gluten) — déjà en 12 EQ
+}
+
 # --- MAPPING GAMMES PAR MOTS-CLÉS (ordre important : du plus spécifique au plus général) ---
 # Chaque entrée : (sous-chaîne à chercher dans ItemName en majuscules, gamme assignée)
 # L'ordre est crucial : Sans Gluten et Sans Alcool avant les autres pour éviter les faux positifs.
@@ -132,6 +137,10 @@ def harmoniser_formats_alc(row):
             return pd.Series([qty * 2, code])
         return pd.Series([qty, code])
     else:
+        # Ne pas doubler si le code est dans CODES_ALREADY_12EQ
+        if code in CODES_ALREADY_12EQ:
+            return pd.Series([qty, code])
+        # Doubler les autres cas
         if code.endswith('SG4P') or code in CODES_4PACK or (not code.endswith('12')):
             return pd.Series([qty * 2, code])
         return pd.Series([qty, code])
