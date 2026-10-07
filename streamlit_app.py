@@ -257,8 +257,8 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
         date_12m_prev_start = date_12m_start - timedelta(days=365)
         date_12m_prev_end = date_12m_end - timedelta(days=365)
 
-        # Utiliser df_raw_all pour inclure 2024 si disponible, sinon df_raw
-        df_for_12m = df_raw_all[df_raw_all['DateAnalyse'].dt.year >= 2024].copy() if df_raw_all is not None else df_raw
+        # Utiliser df_raw_all (qui inclut 2024 si disponible) pour la fenêtre 12m
+        df_for_12m = df_raw_all[df_raw_all['DateAnalyse'].dt.year >= 2024].copy() if df_raw_all is not None and not df_raw_all.empty else df_raw
 
         df_12m_curr = df_for_12m[(df_for_12m['DateAnalyse'].dt.date >= date_12m_start) & (df_for_12m['DateAnalyse'].dt.date <= date_12m_end)]
         df_12m_prev = df_for_12m[(df_for_12m['DateAnalyse'].dt.date >= date_12m_prev_start) & (df_for_12m['DateAnalyse'].dt.date <= date_12m_prev_end)]
@@ -288,25 +288,34 @@ if df_raw_all is not None:
     df_raw_all['DateLivraison'] = pd.to_datetime(df_raw_all['DateLivraison'], errors='coerce')
     df_raw_all['DateAnalyse'] = df_raw_all['DateLivraison'].fillna(df_raw_all['DocDate'])
     
-    df_raw = df_raw_all[df_raw_all['DateAnalyse'].dt.year >= 2025].copy()
+    # Traiter df_raw_all avec inclusion de 2024 pour rolling periods
+    df_raw_with_2024 = df_raw_all[df_raw_all['DateAnalyse'].dt.year >= 2024].copy()
     for col in ['LineQty', 'LineTotal']:
-        df_raw[col] = pd.to_numeric(df_raw[col], errors='coerce').fillna(0)
-    
-    df_raw['Année'] = df_raw['DateAnalyse'].dt.year
-    df_raw['Mois_Nom'] = df_raw['DateAnalyse'].dt.strftime('%m - %B')
-    df_raw['Jour_Annee'] = df_raw['DateAnalyse'].dt.dayofyear
-    df_raw['Semaine'] = df_raw['DateAnalyse'].dt.isocalendar().week
+        df_raw_with_2024[col] = pd.to_numeric(df_raw_with_2024[col], errors='coerce').fillna(0)
+
+    df_raw_with_2024['Année'] = df_raw_with_2024['DateAnalyse'].dt.year
+    df_raw_with_2024['Mois_Nom'] = df_raw_with_2024['DateAnalyse'].dt.strftime('%m - %B')
+    df_raw_with_2024['Jour_Annee'] = df_raw_with_2024['DateAnalyse'].dt.dayofyear
+    df_raw_with_2024['Semaine'] = df_raw_with_2024['DateAnalyse'].dt.isocalendar().week
 
     if page == "Alchimiste":
-        df_raw[['CAISSE EQ', 'SKU_BASE']] = df_raw.apply(harmoniser_formats_alc, axis=1)
+        df_raw_with_2024[['CAISSE EQ', 'SKU_BASE']] = df_raw_with_2024.apply(harmoniser_formats_alc, axis=1)
     else:
-        df_raw['CAISSE EQ'] = df_raw['LineQty']
+        df_raw_with_2024['CAISSE EQ'] = df_raw_with_2024['LineQty']
 
-    # --- CORRECTION SKU SANS ALCOOL ---
+    if 'ItemCode' in df_raw_with_2024.columns and 'ItemName' in df_raw_with_2024.columns:
+        df_raw_with_2024['ItemName'] = df_raw_with_2024.apply(corriger_sku_sans_alcool, axis=1)
+
+    df_raw_with_2024['Gamme'] = df_raw_with_2024['ItemName'].apply(get_gamme)
+
+    # Filtrer pour affichage (2025 et 2026)
+    df_raw = df_raw_with_2024[df_raw_with_2024['DateAnalyse'].dt.year >= 2025].copy()
+
+    # --- CORRECTION SKU SANS ALCOOL (redondant pour df_raw mais garder pour cohérence) ---
     if 'ItemCode' in df_raw.columns and 'ItemName' in df_raw.columns:
         df_raw['ItemName'] = df_raw.apply(corriger_sku_sans_alcool, axis=1)
 
-    # --- AJOUT COLONNE GAMME ---
+    # --- AJOUT COLONNE GAMME (redondant pour df_raw mais garder pour cohérence) ---
     df_raw['Gamme'] = df_raw['ItemName'].apply(get_gamme)
 
     # --- FILTRES SIDEBAR ---
@@ -451,7 +460,7 @@ if df_raw_all is not None:
     pivot_sku_xls = df_2026_full.pivot_table(index='ItemName', columns='Mois_Nom', values='CAISSE EQ', aggfunc='sum').fillna(0)
     pivot_banner_xls = df_2026_full.groupby('GroupName')['CAISSE EQ'].sum().to_frame()
 
-    excel_file = generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku_xls, pivot_banner_xls, df_raw, df_raw_all)
+    excel_file = generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku_xls, pivot_banner_xls, df_raw, df_raw_with_2024)
     st.sidebar.download_button(f"📥 Télécharger Rapport {page} (Excel)", data=excel_file, file_name=f"Rapport_{page}_{date.today()}.xlsx")
 
     # --- TOP BANNIÈRES ET CLIENTS ---
