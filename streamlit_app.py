@@ -62,6 +62,13 @@ CODES_ALREADY_12EQ = {
     'MABSGU',  # ULTRA BLONDE (Sans Gluten) — déjà en 12 EQ
 }
 
+# --- MAPPING POUR HARMONISER LES NOMS DE BANNIÈRES ENTRE ANNÉES ---
+BANNIERE_ALIAS = {
+    'METRO': 'MÉTRO FRANCHISÉ -CO',
+    'IGA': 'IGA CORPORATIF',
+    # À compléter selon les données réelles
+}
+
 # --- MAPPING GAMMES PAR MOTS-CLÉS (ordre important : du plus spécifique au plus général) ---
 # Chaque entrée : (sous-chaîne à chercher dans ItemName en majuscules, gamme assignée)
 # L'ordre est crucial : Sans Gluten et Sans Alcool avant les autres pour éviter les faux positifs.
@@ -126,6 +133,13 @@ def get_gamme(item_name):
         if keyword.upper() in name_up:
             return gamme
     return 'Non classé'
+
+
+def normaliser_banniere(banner_name):
+    """Normalise le nom de bannière selon le mapping BANNIERE_ALIAS."""
+    if banner_name in BANNIERE_ALIAS:
+        return BANNIERE_ALIAS[banner_name]
+    return banner_name
 
 
 # --- LOGIQUE DE CONVERSION ---
@@ -286,26 +300,46 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
 
         # --- NOUVEL ONGLET: SG 4 PACK x BANNIÈRE (Détail par bannière avec synthèse pré/post-juin) ---
         # Filtrer pour 4-pack sans gluten: produits classés "Sans Gluten" contenant "4 PACK"
-        df_sg4pack = df_raw[
-            (df_raw['Gamme'] == 'Sans Gluten') &
-            (df_raw['ItemName'].str.contains('4 PACK', case=False, na=False))
+        df_sg4pack = df_raw_with_2024[
+            (df_raw_with_2024['Gamme'] == 'Sans Gluten') &
+            (df_raw_with_2024['ItemName'].str.contains('4 PACK', case=False, na=False))
         ].copy()
 
         if not df_sg4pack.empty and 'GroupName' in df_sg4pack.columns:
-            # Ajouter colonne YearMonth pour pivotage mensuel
-            df_sg4pack['YearMonth'] = df_sg4pack['DateAnalyse'].dt.strftime('%Y-%m')
+            # Normaliser les noms de bannières (appliquer le mapping BANNIERE_ALIAS)
+            df_sg4pack['GroupName_Norm'] = df_sg4pack['GroupName'].apply(normaliser_banniere)
 
-            # Créer pivot: (GroupName, ItemName) × YearMonth
+            # Ajouter colonne YearMonth et YearMonthNum pour pivotage mensuel et tri
+            df_sg4pack['YearMonth'] = df_sg4pack['DateAnalyse'].dt.strftime('%Y-%m')
+            df_sg4pack['YearMonthNum'] = df_sg4pack['DateAnalyse'].dt.year * 100 + df_sg4pack['DateAnalyse'].dt.month
+
+            # Déterminer le dernier mois complet (exclure le mois en cours partiel s'il y a lieu)
+            today = pd.Timestamp.now().date()
+            max_date_in_data = df_sg4pack['DateAnalyse'].max().date()
+            # Si on n'est pas au dernier jour du mois, le dernier mois complet est le mois précédent
+            if today.day < 28:  # Approximation pour éviter les problèmes de fin de mois
+                last_complete_month_num = (today.year * 100 + today.month) - 1
+            else:
+                last_complete_month_num = today.year * 100 + today.month
+
+            # Créer pivot: (GroupName_Norm, ItemName) × YearMonth
             sg4pack_pivot = df_sg4pack.pivot_table(
-                index=['GroupName', 'ItemName'],
+                index=['GroupName_Norm', 'ItemName'],
                 columns='YearMonth',
                 values='CAISSE EQ',
                 aggfunc='sum'
             ).fillna(0)
 
-            # Identifier top 8 bannières par volume total
-            banner_volumes = sg4pack_pivot.groupby(level='GroupName').sum().sum(axis=1).sort_values(ascending=False)
-            top_8_banners = banner_volumes.head(8).index.tolist()
+            # Trier les colonnes chronologiquement
+            sg4pack_pivot = sg4pack_pivot[[col for col in sorted(sg4pack_pivot.columns)]]
+
+            # Identifier top 8 bannières par volume total 2026
+            df_2026_sg = df_sg4pack[df_sg4pack['Année'] == 2026]
+            if not df_2026_sg.empty:
+                banner_volumes_2026 = df_2026_sg.groupby('GroupName_Norm')['CAISSE EQ'].sum().sort_values(ascending=False)
+                top_8_banners = banner_volumes_2026.head(8).index.tolist()
+            else:
+                top_8_banners = []
 
             # Construire la structure hiérarchique: Bannière | SKU avec sous-totaux
             rows_dict = {}
@@ -326,7 +360,7 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
                     rows_dict[f"{banner} | SOUS-TOTAL"] = dict(banner_data.sum())
 
             # Ajouter "Autres bannières"
-            other_banners_data = sg4pack_pivot.loc[~sg4pack_pivot.index.get_level_values('GroupName').isin(top_8_banners)]
+            other_banners_data = sg4pack_pivot.loc[~sg4pack_pivot.index.get_level_values('GroupName_Norm').isin(top_8_banners)]
             if not other_banners_data.empty:
                 other_total = other_banners_data.sum()
                 rows_dict["Autres bannières | TOTAL"] = dict(other_total)
@@ -337,19 +371,39 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
             # Créer le DataFrame final
             sg4pack_final = pd.DataFrame.from_dict(rows_dict, orient='index')
 
+            # VALIDATION: Vérifier le TOTAL GLOBAL pour septembre 2026
+            sept_2026_col = '2026-09'
+            if sept_2026_col in sg4pack_final.columns:
+                sept_2026_total = sg4pack_final.loc['TOTAL GLOBAL', sept_2026_col]
+                print(f"\n✓ VALIDATION: TOTAL GLOBAL septembre 2026 = {sept_2026_total:.0f} (doit être ~2364)")
+
             # Ajouter colonnes de synthèse pré/post-juin 2026
-            june_cutoff = '2026-06'
-            pre_june_cols = [c for c in sg4pack_final.columns if c < june_cutoff]
-            post_june_cols = [c for c in sg4pack_final.columns if c >= june_cutoff]
+            pre_june_2026_cols = [c for c in sg4pack_final.columns if c.startswith('2026-') and c <= '2026-05']
+            post_june_2026_cols = [c for c in sg4pack_final.columns if c.startswith('2026-') and c >= '2026-06']
 
-            if pre_june_cols:
-                sg4pack_final['Moy Pré-Juin'] = sg4pack_final[[c for c in pre_june_cols]].mean(axis=1).fillna(0)
-            if post_june_cols:
-                sg4pack_final['Moy Post-Juin'] = sg4pack_final[[c for c in post_june_cols]].mean(axis=1).fillna(0)
+            # Déterminer les mêmes mois pour 2025
+            pre_june_2025_cols = [c.replace('2026', '2025') for c in pre_june_2026_cols if c.replace('2026', '2025') in sg4pack_final.columns]
+            post_june_2025_cols = [c.replace('2026', '2025') for c in post_june_2026_cols if c.replace('2026', '2025') in sg4pack_final.columns]
 
-            if pre_june_cols and post_june_cols:
-                sg4pack_final['Var. Pré/Post %'] = sg4pack_final.apply(
-                    lambda row: calc_variation_pct(row['Moy Post-Juin'], row['Moy Pré-Juin']),
+            if pre_june_2026_cols:
+                sg4pack_final['Moy janv.–mai 2026'] = sg4pack_final[[c for c in pre_june_2026_cols]].mean(axis=1).fillna(0)
+            if post_june_2026_cols:
+                sg4pack_final['Moy juin → fin 2026'] = sg4pack_final[[c for c in post_june_2026_cols]].mean(axis=1).fillna(0)
+            if pre_june_2025_cols:
+                sg4pack_final['Moy janv.–mai 2025'] = sg4pack_final[[c for c in pre_june_2025_cols if c in sg4pack_final.columns]].mean(axis=1).fillna(0)
+            if post_june_2025_cols:
+                sg4pack_final['Moy juin → fin 2025'] = sg4pack_final[[c for c in post_june_2025_cols if c in sg4pack_final.columns]].mean(axis=1).fillna(0)
+
+            # Ajouter variations
+            if 'Moy janv.–mai 2026' in sg4pack_final.columns and 'Moy juin → fin 2026' in sg4pack_final.columns:
+                sg4pack_final['Var. pré/post 2026 %'] = sg4pack_final.apply(
+                    lambda row: calc_variation_pct(row['Moy juin → fin 2026'], row['Moy janv.–mai 2026']) if row['Moy janv.–mai 2026'] > 0 else None,
+                    axis=1
+                )
+
+            if 'Moy juin → fin 2025' in sg4pack_final.columns and 'Moy juin → fin 2026' in sg4pack_final.columns:
+                sg4pack_final['Var. vs 2025 %'] = sg4pack_final.apply(
+                    lambda row: calc_variation_pct(row['Moy juin → fin 2026'], row['Moy juin → fin 2025']) if row['Moy juin → fin 2025'] > 0 else None,
                     axis=1
                 )
 
@@ -358,13 +412,244 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
             ws_sg4pack = writer.sheets['SG 4Pack x Bannière']
             ws_sg4pack.set_column(0, 0, 45)
 
-            # Formater les colonnes
+            # Formater les colonnes et ajouter fond rouge pour ≤ -20%
+            fmt_red_bg = workbook.add_format({'bg_color': '#FFE6E6', 'num_format': '0.0%'})
+
             for i, col in enumerate(sg4pack_final.columns):
                 excel_col = i + 1
-                if 'Var.' in str(col) or '%' in str(col):
-                    ws_sg4pack.set_column(excel_col, excel_col, 16, fmt_perc)
+                if 'Var.' in str(col) or 'Moy' in str(col) or '%' in str(col):
+                    ws_sg4pack.set_column(excel_col, excel_col, 18, fmt_perc)
+                    # Ajouter formatage conditionnel pour les variations
+                    if 'Var.' in str(col):
+                        for row_idx, row_val in enumerate(sg4pack_final[col], 2):
+                            if row_val is not None and row_val <= -0.20:
+                                ws_sg4pack.write(row_idx - 1, excel_col - 1, row_val, fmt_red_bg)
                 else:
                     ws_sg4pack.set_column(excel_col, excel_col, 16, fmt_qty)
+
+        # --- NOUVEL ONGLET: SG NB MAGASINS (Nombre de magasins distincts par bannière, SKU et mois) ---
+        if not df_sg4pack.empty and 'CardCode' in df_sg4pack.columns:
+            # Compter le nombre de magasins distincts (CardCode) par bannière, SKU et mois
+            df_sg_stores = df_sg4pack[
+                (df_sg4pack['Gamme'] == 'Sans Gluten') &
+                (df_sg4pack['ItemName'].str.contains('4 PACK', case=False, na=False))
+            ].copy()
+
+            if not df_sg_stores.empty:
+                df_sg_stores['YearMonth'] = df_sg_stores['DateAnalyse'].dt.strftime('%Y-%m')
+
+                # Pivot: (GroupName_Norm, ItemName) × YearMonth avec count de CardCode distinct
+                sg_stores_pivot = df_sg_stores.pivot_table(
+                    index=['GroupName_Norm', 'ItemName'],
+                    columns='YearMonth',
+                    values='CardCode',
+                    aggfunc='nunique'
+                ).fillna(0).astype(int)
+
+                # Trier les colonnes chronologiquement
+                sg_stores_pivot = sg_stores_pivot[[col for col in sorted(sg_stores_pivot.columns)]]
+
+                # Identifier top 8 bannières (même logique que SG 4Pack)
+                banner_stores_2026 = df_sg_stores[df_sg_stores['Année'] == 2026].groupby('GroupName_Norm')['CardCode'].nunique().sort_values(ascending=False)
+                top_8_banners_stores = banner_stores_2026.head(8).index.tolist()
+
+                # Construire la structure hiérarchique
+                rows_stores_dict = {}
+                for banner in top_8_banners_stores:
+                    banner_stores = sg_stores_pivot.loc[banner]
+
+                    if isinstance(banner_stores, pd.Series):
+                        # Un seul SKU
+                        rows_stores_dict[f"{banner} | {banner_stores.name}"] = dict(banner_stores.astype(int))
+                        rows_stores_dict[f"{banner} | SOUS-TOTAL"] = dict(banner_stores.astype(int))
+                    else:
+                        # Plusieurs SKUs
+                        banner_stores_sorted = banner_stores.loc[banner_stores.sum(axis=1).sort_values(ascending=False).index]
+                        for sku in banner_stores_sorted.index:
+                            rows_stores_dict[f"{banner} | {sku}"] = dict(banner_stores.loc[sku].astype(int))
+                        rows_stores_dict[f"{banner} | SOUS-TOTAL"] = dict(banner_stores.sum().astype(int))
+
+                # Ajouter autres bannières
+                other_banners_stores = sg_stores_pivot.loc[~sg_stores_pivot.index.get_level_values('GroupName_Norm').isin(top_8_banners_stores)]
+                if not other_banners_stores.empty:
+                    other_stores_total = other_banners_stores.sum().astype(int)
+                    rows_stores_dict["Autres bannières | TOTAL"] = dict(other_stores_total)
+
+                # Total global
+                rows_stores_dict['TOTAL GLOBAL'] = dict(sg_stores_pivot.sum().astype(int))
+
+                sg_stores_final = pd.DataFrame.from_dict(rows_stores_dict, orient='index')
+
+                # Sauvegarder l'onglet
+                sg_stores_final.to_excel(writer, sheet_name='SG Nb Magasins')
+                ws_stores = writer.sheets['SG Nb Magasins']
+                ws_stores.set_column(0, 0, 45)
+
+                for i, col in enumerate(sg_stores_final.columns):
+                    excel_col = i + 1
+                    ws_stores.set_column(excel_col, excel_col, 16, fmt_qty)
+
+        # --- NOUVEL ONGLET: ULTRA BLONDE SA (Analyse spéciale de la gamme Ultra Blonde Sans Alcool) ---
+        df_ultra_blonde_sa = df_raw_with_2024[
+            (df_raw_with_2024['ItemName'].str.contains('ULTRA.*BLONDE.*SANS', case=False, na=False)) |
+            (df_raw_with_2024['ItemCode'] == 'MABSGU')
+        ].copy()
+
+        if not df_ultra_blonde_sa.empty and 'GroupName' in df_ultra_blonde_sa.columns:
+            df_ultra_blonde_sa['GroupName_Norm'] = df_ultra_blonde_sa['GroupName'].apply(normaliser_banniere)
+            df_ultra_blonde_sa['YearMonth'] = df_ultra_blonde_sa['DateAnalyse'].dt.strftime('%Y-%m')
+
+            ultra_pivot = df_ultra_blonde_sa.pivot_table(
+                index=['GroupName_Norm', 'ItemName'],
+                columns='YearMonth',
+                values='CAISSE EQ',
+                aggfunc='sum'
+            ).fillna(0)
+
+            # Trier chronologiquement
+            ultra_pivot = ultra_pivot[[col for col in sorted(ultra_pivot.columns)]]
+
+            if not ultra_pivot.empty:
+                # Identifier top 8 bannières pour ULTRA
+                df_ultra_2026 = df_ultra_blonde_sa[df_ultra_blonde_sa['Année'] == 2026]
+                if not df_ultra_2026.empty:
+                    ultra_banners_2026 = df_ultra_2026.groupby('GroupName_Norm')['CAISSE EQ'].sum().sort_values(ascending=False)
+                    top_8_ultra_banners = ultra_banners_2026.head(8).index.tolist()
+                else:
+                    top_8_ultra_banners = []
+
+                rows_ultra_dict = {}
+                for banner in top_8_ultra_banners:
+                    banner_ultra = ultra_pivot.loc[banner]
+
+                    if isinstance(banner_ultra, pd.Series):
+                        rows_ultra_dict[f"{banner} | {banner_ultra.name}"] = dict(banner_ultra)
+                        rows_ultra_dict[f"{banner} | SOUS-TOTAL"] = dict(banner_ultra)
+                    else:
+                        banner_ultra_sorted = banner_ultra.loc[banner_ultra.sum(axis=1).sort_values(ascending=False).index]
+                        for sku in banner_ultra_sorted.index:
+                            rows_ultra_dict[f"{banner} | {sku}"] = dict(banner_ultra.loc[sku])
+                        rows_ultra_dict[f"{banner} | SOUS-TOTAL"] = dict(banner_ultra.sum())
+
+                # Autres bannières
+                other_ultra = ultra_pivot.loc[~ultra_pivot.index.get_level_values('GroupName_Norm').isin(top_8_ultra_banners)]
+                if not other_ultra.empty:
+                    rows_ultra_dict["Autres bannières | TOTAL"] = dict(other_ultra.sum())
+
+                rows_ultra_dict['TOTAL GLOBAL'] = dict(ultra_pivot.sum())
+
+                ultra_final = pd.DataFrame.from_dict(rows_ultra_dict, orient='index')
+                ultra_final.to_excel(writer, sheet_name='ULTRA BLONDE SA')
+                ws_ultra = writer.sheets['ULTRA BLONDE SA']
+                ws_ultra.set_column(0, 0, 45)
+
+                for i, col in enumerate(ultra_final.columns):
+                    excel_col = i + 1
+                    ws_ultra.set_column(excel_col, excel_col, 16, fmt_qty)
+
+        # --- NOUVEL ONGLET: SANS GLUTEN & SANS ALCOOL (Analyse spéciale) ---
+        df_sg_sa = df_raw_with_2024[
+            (df_raw_with_2024['ItemName'].str.contains('SANS GLUTEN', case=False, na=False)) &
+            (df_raw_with_2024['ItemName'].str.contains('SANS ALCOOL', case=False, na=False))
+        ].copy()
+
+        if not df_sg_sa.empty and 'GroupName' in df_sg_sa.columns:
+            df_sg_sa['GroupName_Norm'] = df_sg_sa['GroupName'].apply(normaliser_banniere)
+            df_sg_sa['YearMonth'] = df_sg_sa['DateAnalyse'].dt.strftime('%Y-%m')
+
+            sg_sa_pivot = df_sg_sa.pivot_table(
+                index=['GroupName_Norm', 'ItemName'],
+                columns='YearMonth',
+                values='CAISSE EQ',
+                aggfunc='sum'
+            ).fillna(0)
+
+            # Trier chronologiquement
+            sg_sa_pivot = sg_sa_pivot[[col for col in sorted(sg_sa_pivot.columns)]]
+
+            if not sg_sa_pivot.empty:
+                # Identifier top 8 bannières
+                df_sg_sa_2026 = df_sg_sa[df_sg_sa['Année'] == 2026]
+                if not df_sg_sa_2026.empty:
+                    sg_sa_banners_2026 = df_sg_sa_2026.groupby('GroupName_Norm')['CAISSE EQ'].sum().sort_values(ascending=False)
+                    top_8_sg_sa_banners = sg_sa_banners_2026.head(8).index.tolist()
+                else:
+                    top_8_sg_sa_banners = []
+
+                rows_sg_sa_dict = {}
+                for banner in top_8_sg_sa_banners:
+                    banner_sg_sa = sg_sa_pivot.loc[banner]
+
+                    if isinstance(banner_sg_sa, pd.Series):
+                        rows_sg_sa_dict[f"{banner} | {banner_sg_sa.name}"] = dict(banner_sg_sa)
+                        rows_sg_sa_dict[f"{banner} | SOUS-TOTAL"] = dict(banner_sg_sa)
+                    else:
+                        banner_sg_sa_sorted = banner_sg_sa.loc[banner_sg_sa.sum(axis=1).sort_values(ascending=False).index]
+                        for sku in banner_sg_sa_sorted.index:
+                            rows_sg_sa_dict[f"{banner} | {sku}"] = dict(banner_sg_sa.loc[sku])
+                        rows_sg_sa_dict[f"{banner} | SOUS-TOTAL"] = dict(banner_sg_sa.sum())
+
+                # Autres bannières
+                other_sg_sa = sg_sa_pivot.loc[~sg_sa_pivot.index.get_level_values('GroupName_Norm').isin(top_8_sg_sa_banners)]
+                if not other_sg_sa.empty:
+                    rows_sg_sa_dict["Autres bannières | TOTAL"] = dict(other_sg_sa.sum())
+
+                rows_sg_sa_dict['TOTAL GLOBAL'] = dict(sg_sa_pivot.sum())
+
+                sg_sa_final = pd.DataFrame.from_dict(rows_sg_sa_dict, orient='index')
+                sg_sa_final.to_excel(writer, sheet_name='SANS GLUTEN & SANS ALCOOL')
+                ws_sg_sa = writer.sheets['SANS GLUTEN & SANS ALCOOL']
+                ws_sg_sa.set_column(0, 0, 45)
+
+                for i, col in enumerate(sg_sa_final.columns):
+                    excel_col = i + 1
+                    ws_sg_sa.set_column(excel_col, excel_col, 16, fmt_qty)
+
+        # --- VALIDATION: Afficher les comptes de magasins pour bannieres spécifiques ---
+        print("\n" + "="*100)
+        print("📊 VALIDATION: COMPTES DE MAGASINS DISTINCTS")
+        print("="*100)
+
+        # Compter les magasins pour ULTRA BLONDE SA et SANS GLUTEN & SANS ALCOOL
+        if not df_ultra_blonde_sa.empty and 'CardCode' in df_ultra_blonde_sa.columns:
+            print("\n🏪 ULTRA BLONDE SA - Comptes distincts par bannière:")
+            print("-" * 100)
+            ultra_stores = df_ultra_blonde_sa.groupby('GroupName_Norm')['CardCode'].nunique().sort_values(ascending=False)
+            for banner, count in ultra_stores.items():
+                print(f"   • {banner:30}: {count} magasins")
+
+        if not df_sg_sa.empty and 'CardCode' in df_sg_sa.columns:
+            print("\n🏪 SANS GLUTEN & SANS ALCOOL - Comptes distincts par bannière:")
+            print("-" * 100)
+            sg_sa_stores = df_sg_sa.groupby('GroupName_Norm')['CardCode'].nunique().sort_values(ascending=False)
+            for banner, count in sg_sa_stores.items():
+                print(f"   • {banner:30}: {count} magasins")
+
+        # Afficher les comptes de magasins pour SG 4Pack par bannière et mois spécifique (Août et Septembre 2026)
+        if not df_sg4pack.empty and 'CardCode' in df_sg4pack.columns:
+            print("\n🏪 SG 4PACK - Comptes distincts pour AOÛT et SEPTEMBRE 2026:")
+            print("-" * 100)
+
+            df_sg4pack_2026 = df_sg4pack[df_sg4pack['Année'] == 2026].copy()
+            df_sg4pack_2026['YearMonth'] = df_sg4pack_2026['DateAnalyse'].dt.strftime('%Y-%m')
+
+            for month in ['2026-08', '2026-09']:
+                df_month = df_sg4pack_2026[df_sg4pack_2026['YearMonth'] == month]
+                if not df_month.empty:
+                    print(f"\n   {month}:")
+
+                    # Par bannière spécifique (IGA CORPORATIF et MÉTRO FRANCHISÉ -CO)
+                    for target_banner in ['IGA CORPORATIF', 'MÉTRO FRANCHISÉ -CO']:
+                        df_banner = df_month[df_month['GroupName_Norm'] == target_banner]
+                        if not df_banner.empty:
+                            for sku in sorted(df_banner['ItemName'].unique()):
+                                df_sku = df_banner[df_banner['ItemName'] == sku]
+                                store_count = df_sku['CardCode'].nunique()
+                                total_caisses = df_sku['CAISSE EQ'].sum()
+                                print(f"      • {target_banner} | {sku}")
+                                print(f"        → {store_count} magasins, {total_caisses:.0f} caisses")
+
+        print("\n" + "="*100 + "\n")
 
     return output.getvalue()
 
@@ -408,6 +693,32 @@ if df_raw_all is not None:
 
     # --- AJOUT COLONNE GAMME (redondant pour df_raw mais garder pour cohérence) ---
     df_raw['Gamme'] = df_raw['ItemName'].apply(get_gamme)
+
+    # --- DIAGNOSTIC: BANNIÈRES EN 2025 vs 2026 ---
+    if page == "Alchimiste":
+        df_2025_temp = df_raw[df_raw['Année'] == 2025]
+        df_2026_temp = df_raw[df_raw['Année'] == 2026]
+
+        gn_2025 = set(df_2025_temp['GroupName'].unique()) if not df_2025_temp.empty else set()
+        gn_2026 = set(df_2026_temp['GroupName'].unique()) if not df_2026_temp.empty else set()
+
+        absent_2026 = gn_2025 - gn_2026
+        absent_2025 = gn_2026 - gn_2025
+
+        if absent_2026 or absent_2025:
+            print("\n" + "="*100)
+            print("⚠️  DIAGNOSTIC: BANNIÈRES MANQUANTES")
+            print("="*100)
+            if absent_2026:
+                print(f"\n❌ Bannières présentes en 2025 MAIS ABSENTES en 2026:")
+                for bn in sorted(absent_2026):
+                    print(f"   • {bn}")
+            if absent_2025:
+                print(f"\n❌ Bannières présentes en 2026 MAIS ABSENTES en 2025:")
+                for bn in sorted(absent_2025):
+                    print(f"   • {bn}")
+            print("\n⚠️  Vérifier les mappages de BANNIERE_ALIAS!")
+            print("="*100 + "\n")
 
     # --- FILTRES SIDEBAR ---
     st.sidebar.divider()
