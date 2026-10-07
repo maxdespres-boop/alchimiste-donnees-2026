@@ -284,6 +284,88 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
         rolling_12m['Variation %'] = rolling_12m.apply(lambda row: calc_variation_pct(row[col_12m_curr], row[col_12m_prev]), axis=1)
         save_sheet(rolling_12m, 'Rolling 12 mois', is_money=False, add_row_total=True, with_gamme=True)
 
+        # --- NOUVEL ONGLET: SG 4 PACK x BANNIÈRE (Détail par bannière avec synthèse pré/post-juin) ---
+        # Filtrer pour 4-pack sans gluten: produits classés "Sans Gluten" contenant "4 PACK"
+        df_sg4pack = df_raw[
+            (df_raw['Gamme'] == 'Sans Gluten') &
+            (df_raw['ItemName'].str.contains('4 PACK', case=False, na=False))
+        ].copy()
+
+        if not df_sg4pack.empty and 'GroupName' in df_sg4pack.columns:
+            # Ajouter colonne YearMonth pour pivotage mensuel
+            df_sg4pack['YearMonth'] = df_sg4pack['DateAnalyse'].dt.strftime('%Y-%m')
+
+            # Créer pivot: (GroupName, ItemName) × YearMonth
+            sg4pack_pivot = df_sg4pack.pivot_table(
+                index=['GroupName', 'ItemName'],
+                columns='YearMonth',
+                values='CAISSE EQ',
+                aggfunc='sum'
+            ).fillna(0)
+
+            # Identifier top 8 bannières par volume total
+            banner_volumes = sg4pack_pivot.groupby(level='GroupName').sum().sum(axis=1).sort_values(ascending=False)
+            top_8_banners = banner_volumes.head(8).index.tolist()
+
+            # Construire la structure hiérarchique: Bannière | SKU avec sous-totaux
+            rows_dict = {}
+
+            for banner in top_8_banners:
+                banner_data = sg4pack_pivot.loc[banner]
+
+                # Gérer cas d'un seul SKU vs plusieurs SKUs
+                if isinstance(banner_data, pd.Series):
+                    # Un seul SKU pour cette bannière
+                    rows_dict[f"{banner} | {banner_data.name}"] = dict(banner_data)
+                    rows_dict[f"{banner} | SOUS-TOTAL"] = dict(banner_data)
+                else:
+                    # Plusieurs SKUs: les afficher triés par volume, puis sous-total
+                    banner_data_sorted = banner_data.loc[banner_data.sum(axis=1).sort_values(ascending=False).index]
+                    for sku in banner_data_sorted.index:
+                        rows_dict[f"{banner} | {sku}"] = dict(banner_data.loc[sku])
+                    rows_dict[f"{banner} | SOUS-TOTAL"] = dict(banner_data.sum())
+
+            # Ajouter "Autres bannières"
+            other_banners_data = sg4pack_pivot.loc[~sg4pack_pivot.index.get_level_values('GroupName').isin(top_8_banners)]
+            if not other_banners_data.empty:
+                other_total = other_banners_data.sum()
+                rows_dict["Autres bannières | TOTAL"] = dict(other_total)
+
+            # Ajouter TOTAL GLOBAL
+            rows_dict['TOTAL GLOBAL'] = dict(sg4pack_pivot.sum())
+
+            # Créer le DataFrame final
+            sg4pack_final = pd.DataFrame.from_dict(rows_dict, orient='index')
+
+            # Ajouter colonnes de synthèse pré/post-juin 2026
+            june_cutoff = '2026-06'
+            pre_june_cols = [c for c in sg4pack_final.columns if c < june_cutoff]
+            post_june_cols = [c for c in sg4pack_final.columns if c >= june_cutoff]
+
+            if pre_june_cols:
+                sg4pack_final['Moy Pré-Juin'] = sg4pack_final[[c for c in pre_june_cols]].mean(axis=1).fillna(0)
+            if post_june_cols:
+                sg4pack_final['Moy Post-Juin'] = sg4pack_final[[c for c in post_june_cols]].mean(axis=1).fillna(0)
+
+            if pre_june_cols and post_june_cols:
+                sg4pack_final['Var. Pré/Post %'] = sg4pack_final.apply(
+                    lambda row: calc_variation_pct(row['Moy Post-Juin'], row['Moy Pré-Juin']),
+                    axis=1
+                )
+
+            # Sauvegarder l'onglet
+            sg4pack_final.to_excel(writer, sheet_name='SG 4Pack x Bannière')
+            ws_sg4pack = writer.sheets['SG 4Pack x Bannière']
+            ws_sg4pack.set_column(0, 0, 45)
+
+            # Formater les colonnes
+            for i, col in enumerate(sg4pack_final.columns):
+                excel_col = i + 1
+                if 'Var.' in str(col) or '%' in str(col):
+                    ws_sg4pack.set_column(excel_col, excel_col, 16, fmt_perc)
+                else:
+                    ws_sg4pack.set_column(excel_col, excel_col, 16, fmt_qty)
+
     return output.getvalue()
 
 # --- MAIN APP ---
