@@ -63,6 +63,8 @@ CODES_4PACK = {
 GAMME_RULES = [
     # Sans Gluten (priorité max — contient souvent "SANS ALCOOL" aussi)
     ('SANS GLUTEN',         'Sans Gluten'),
+    # Ultra → Sans Gluten (avant BLONDE pour éviter priorité fausse)
+    ('ULTRA',               'Sans Gluten'),
     # Sans Alcool
     ('SANS ALCOOL',         'Sans Alcool'),
     ('S/A',                 'Sans Alcool'),
@@ -149,7 +151,7 @@ def corriger_sku_sans_alcool(row):
     return name
 
 # --- EXCEL PRO ---
-def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_banner, df_raw):
+def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_banner, df_raw, df_raw_all=None):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         workbook = writer.book
@@ -164,6 +166,20 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
                 df_t.insert(0, 'Gamme', df_t.index.map(get_gamme))
             if add_row_total:
                 df_t.loc['TOTAL GLOBAL'] = df_t.sum(numeric_only=True)
+                # Corriger Variation % pour TOTAL GLOBAL si elle existe
+                for col in df_t.columns:
+                    if 'Variation %' in str(col):
+                        # Recalculer: Variation % = total courant / total précédent - 1
+                        # On cherche les colonnes de valeur (pas Var. Absolue ni Gamme)
+                        val_cols = [c for c in df_t.columns if c not in ['Gamme', 'Var. Absolue', col] and 'Variation %' not in str(c)]
+                        if len(val_cols) >= 2:
+                            prev_col, curr_col = val_cols[-2], val_cols[-1]
+                            total_prev = df_t.loc['TOTAL GLOBAL', prev_col]
+                            total_curr = df_t.loc['TOTAL GLOBAL', curr_col]
+                            if total_prev != 0:
+                                df_t.loc['TOTAL GLOBAL', col] = (total_curr / total_prev) - 1
+                            else:
+                                df_t.loc['TOTAL GLOBAL', col] = None
             df_t.to_excel(writer, sheet_name=name)
             ws = writer.sheets[name]
             ws.set_column(0, 0, 42)
@@ -182,45 +198,82 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
         save_sheet(pivot_val,    'Dollars Mensuels YOY',is_money=True, add_row_total=False, with_gamme=False)
         save_sheet(pivot_banner, 'Bannières 2026',      add_row_total=True,  with_gamme=False)
         
-        # --- NOUVEAUX ONGLETS ROLLING AVEC YOY ---
-        # Utiliser Jour_Annee pour comparer le même jour de l'année entre 2025 et 2026
-        today = pd.Timestamp.now().date()
-        today_doy = pd.Timestamp(today).dayofyear  # Jour de l'année (1-366)
-        
-        # Rolling 4 semaines — jour_annee actuel vs 28 jours avant
-        min_doy_4w = max(1, today_doy - 28)
-        df_4w_2026 = df_raw[(df_raw['Année'] == 2026) & (df_raw['Jour_Annee'] >= min_doy_4w) & (df_raw['Jour_Annee'] <= today_doy)]
-        df_4w_2025 = df_raw[(df_raw['Année'] == 2025) & (df_raw['Jour_Annee'] >= min_doy_4w) & (df_raw['Jour_Annee'] <= today_doy)]
-        
-        rolling_4w_26 = df_4w_2026.groupby('ItemName')['CAISSE EQ'].sum()
-        rolling_4w_25 = df_4w_2025.groupby('ItemName')['CAISSE EQ'].sum()
-        rolling_4w = pd.DataFrame({'2025 (4w)': rolling_4w_25, '2026 (4w)': rolling_4w_26}).fillna(0)
-        rolling_4w['Var. Absolue'] = rolling_4w['2026 (4w)'] - rolling_4w['2025 (4w)']
-        rolling_4w['Variation %'] = (rolling_4w['Var. Absolue'] / rolling_4w['2025 (4w)'].replace(0, 1))
-        save_sheet(rolling_4w, 'Rolling 4 semaines', is_money=False, add_row_total=False, with_gamme=True)
-        
-        # Rolling 3 mois — jour_annee actuel vs 90 jours avant
-        min_doy_3m = max(1, today_doy - 90)
-        df_3m_2026 = df_raw[(df_raw['Année'] == 2026) & (df_raw['Jour_Annee'] >= min_doy_3m) & (df_raw['Jour_Annee'] <= today_doy)]
-        df_3m_2025 = df_raw[(df_raw['Année'] == 2025) & (df_raw['Jour_Annee'] >= min_doy_3m) & (df_raw['Jour_Annee'] <= today_doy)]
-        
-        rolling_3m_26 = df_3m_2026.groupby('ItemName')['CAISSE EQ'].sum()
-        rolling_3m_25 = df_3m_2025.groupby('ItemName')['CAISSE EQ'].sum()
-        rolling_3m = pd.DataFrame({'2025 (3m)': rolling_3m_25, '2026 (3m)': rolling_3m_26}).fillna(0)
-        rolling_3m['Var. Absolue'] = rolling_3m['2026 (3m)'] - rolling_3m['2025 (3m)']
-        rolling_3m['Variation %'] = (rolling_3m['Var. Absolue'] / rolling_3m['2025 (3m)'].replace(0, 1))
-        save_sheet(rolling_3m, 'Rolling 3 mois', is_money=False, add_row_total=False, with_gamme=True)
-        
-        # Rolling 12 mois — entire YTD (depuis jour 1 jusqu'au jour_annee actuel)
-        df_12m_2026 = df_raw[(df_raw['Année'] == 2026) & (df_raw['Jour_Annee'] <= today_doy)]
-        df_12m_2025 = df_raw[(df_raw['Année'] == 2025) & (df_raw['Jour_Annee'] <= today_doy)]
-        
-        rolling_12m_26 = df_12m_2026.groupby('ItemName')['CAISSE EQ'].sum()
-        rolling_12m_25 = df_12m_2025.groupby('ItemName')['CAISSE EQ'].sum()
-        rolling_12m = pd.DataFrame({'2025 (12m)': rolling_12m_25, '2026 (12m)': rolling_12m_26}).fillna(0)
-        rolling_12m['Var. Absolue'] = rolling_12m['2026 (12m)'] - rolling_12m['2025 (12m)']
-        rolling_12m['Variation %'] = (rolling_12m['Var. Absolue'] / rolling_12m['2025 (12m)'].replace(0, 1))
-        save_sheet(rolling_12m, 'Rolling 12 mois', is_money=False, add_row_total=False, with_gamme=True)
+        # --- NOUVEAUX ONGLETS ROLLING AVEC YOY (VRAIES FENÊTRES GLISSANTES) ---
+        # Fenêtres basées sur DateAnalyse (pas Jour_Annee, pas filtre par année)
+        D = pd.Timestamp.now().date()  # Date de fin (dernière date disponible ou aujourd'hui)
+
+        # Helper: Corriger Variation % (vide si ancien == 0)
+        def calc_variation_pct(nouveau, ancien):
+            if ancien == 0:
+                return None
+            return (nouveau / ancien) - 1
+
+        # --- ROLLING 4 SEMAINES ---
+        date_4w_start = D - timedelta(days=27)
+        date_4w_end = D
+        date_4w_prev_start = date_4w_start - timedelta(days=364)  # Alignement jour de semaine
+        date_4w_prev_end = date_4w_end - timedelta(days=364)
+
+        df_4w_curr = df_raw[(df_raw['DateAnalyse'].dt.date >= date_4w_start) & (df_raw['DateAnalyse'].dt.date <= date_4w_end)]
+        df_4w_prev = df_raw[(df_raw['DateAnalyse'].dt.date >= date_4w_prev_start) & (df_raw['DateAnalyse'].dt.date <= date_4w_prev_end)]
+
+        rolling_4w_curr = df_4w_curr.groupby('ItemName')['CAISSE EQ'].sum()
+        rolling_4w_prev = df_4w_prev.groupby('ItemName')['CAISSE EQ'].sum()
+
+        col_4w_curr = f"{date_4w_start.strftime('%d-%b-%Y')} → {date_4w_end.strftime('%d-%b-%Y')}"
+        col_4w_prev = f"{date_4w_prev_start.strftime('%d-%b-%Y')} → {date_4w_prev_end.strftime('%d-%b-%Y')}"
+
+        rolling_4w = pd.DataFrame({col_4w_prev: rolling_4w_prev, col_4w_curr: rolling_4w_curr}).fillna(0)
+        rolling_4w = rolling_4w.sort_values(col_4w_curr, ascending=False)
+        rolling_4w['Var. Absolue'] = rolling_4w[col_4w_curr] - rolling_4w[col_4w_prev]
+        rolling_4w['Variation %'] = rolling_4w.apply(lambda row: calc_variation_pct(row[col_4w_curr], row[col_4w_prev]), axis=1)
+        save_sheet(rolling_4w, 'Rolling 4 semaines', is_money=False, add_row_total=True, with_gamme=True)
+
+        # --- ROLLING 3 MOIS ---
+        date_3m_start = D - timedelta(days=89)
+        date_3m_end = D
+        date_3m_prev_start = date_3m_start - timedelta(days=365)
+        date_3m_prev_end = date_3m_end - timedelta(days=365)
+
+        df_3m_curr = df_raw[(df_raw['DateAnalyse'].dt.date >= date_3m_start) & (df_raw['DateAnalyse'].dt.date <= date_3m_end)]
+        df_3m_prev = df_raw[(df_raw['DateAnalyse'].dt.date >= date_3m_prev_start) & (df_raw['DateAnalyse'].dt.date <= date_3m_prev_end)]
+
+        rolling_3m_curr = df_3m_curr.groupby('ItemName')['CAISSE EQ'].sum()
+        rolling_3m_prev = df_3m_prev.groupby('ItemName')['CAISSE EQ'].sum()
+
+        col_3m_curr = f"{date_3m_start.strftime('%d-%b-%Y')} → {date_3m_end.strftime('%d-%b-%Y')}"
+        col_3m_prev = f"{date_3m_prev_start.strftime('%d-%b-%Y')} → {date_3m_prev_end.strftime('%d-%b-%Y')}"
+
+        rolling_3m = pd.DataFrame({col_3m_prev: rolling_3m_prev, col_3m_curr: rolling_3m_curr}).fillna(0)
+        rolling_3m = rolling_3m.sort_values(col_3m_curr, ascending=False)
+        rolling_3m['Var. Absolue'] = rolling_3m[col_3m_curr] - rolling_3m[col_3m_prev]
+        rolling_3m['Variation %'] = rolling_3m.apply(lambda row: calc_variation_pct(row[col_3m_curr], row[col_3m_prev]), axis=1)
+        save_sheet(rolling_3m, 'Rolling 3 mois', is_money=False, add_row_total=True, with_gamme=True)
+
+        # --- ROLLING 12 MOIS ---
+        # Inclut la fin de 2025 (oct-déc 2025)
+        date_12m_start = D - timedelta(days=364)
+        date_12m_end = D
+        date_12m_prev_start = date_12m_start - timedelta(days=365)
+        date_12m_prev_end = date_12m_end - timedelta(days=365)
+
+        # Utiliser df_raw_all pour inclure 2024 si disponible, sinon df_raw
+        df_for_12m = df_raw_all[df_raw_all['DateAnalyse'].dt.year >= 2024].copy() if df_raw_all is not None else df_raw
+
+        df_12m_curr = df_for_12m[(df_for_12m['DateAnalyse'].dt.date >= date_12m_start) & (df_for_12m['DateAnalyse'].dt.date <= date_12m_end)]
+        df_12m_prev = df_for_12m[(df_for_12m['DateAnalyse'].dt.date >= date_12m_prev_start) & (df_for_12m['DateAnalyse'].dt.date <= date_12m_prev_end)]
+
+        rolling_12m_curr = df_12m_curr.groupby('ItemName')['CAISSE EQ'].sum()
+        rolling_12m_prev = df_12m_prev.groupby('ItemName')['CAISSE EQ'].sum()
+
+        col_12m_curr = f"{date_12m_start.strftime('%d-%b-%Y')} → {date_12m_end.strftime('%d-%b-%Y')}"
+        col_12m_prev = f"{date_12m_prev_start.strftime('%d-%b-%Y')} → {date_12m_prev_end.strftime('%d-%b-%Y')}"
+
+        rolling_12m = pd.DataFrame({col_12m_prev: rolling_12m_prev, col_12m_curr: rolling_12m_curr}).fillna(0)
+        rolling_12m = rolling_12m.sort_values(col_12m_curr, ascending=False)
+        rolling_12m['Var. Absolue'] = rolling_12m[col_12m_curr] - rolling_12m[col_12m_prev]
+        rolling_12m['Variation %'] = rolling_12m.apply(lambda row: calc_variation_pct(row[col_12m_curr], row[col_12m_prev]), axis=1)
+        save_sheet(rolling_12m, 'Rolling 12 mois', is_money=False, add_row_total=True, with_gamme=True)
 
     return output.getvalue()
 
@@ -379,18 +432,26 @@ if df_raw_all is not None:
     current_week = df_2026_full['Semaine'].max() if not df_2026_full.empty else 1
     df_w_2026 = df_2026_full[df_2026_full['Semaine'] == current_week]
     df_w_2025 = df_raw[(df_raw['Année'] == 2025) & (df_raw['Semaine'] == current_week)]
-    
+
     w26 = df_w_2026.groupby('ItemName')['CAISSE EQ'].sum()
     w25 = df_w_2025.groupby('ItemName')['CAISSE EQ'].sum()
-    
-    df_week_comp = pd.DataFrame({f'Sem {current_week} (2025)': w25, f'Sem {current_week} (2026)': w26}).fillna(0)
-    df_week_comp['Var. Absolue'] = df_week_comp.iloc[:, 1] - df_week_comp.iloc[:, 0]
-    df_week_comp['Variation %'] = (df_week_comp['Var. Absolue'] / df_week_comp.iloc[:, 0].replace(0, 1))
+
+    col_name_2025 = f'Sem {current_week} (2025)'
+    col_name_2026 = f'Sem {current_week} (2026)'
+
+    df_week_comp = pd.DataFrame({col_name_2025: w25, col_name_2026: w26}).fillna(0)
+    df_week_comp['Var. Absolue'] = df_week_comp[col_name_2026] - df_week_comp[col_name_2025]
+
+    # Variation % : vide si année précédente = 0
+    df_week_comp['Variation %'] = df_week_comp.apply(
+        lambda row: (row[col_name_2026] / row[col_name_2025] - 1) if row[col_name_2025] != 0 else None,
+        axis=1
+    )
 
     pivot_sku_xls = df_2026_full.pivot_table(index='ItemName', columns='Mois_Nom', values='CAISSE EQ', aggfunc='sum').fillna(0)
     pivot_banner_xls = df_2026_full.groupby('GroupName')['CAISSE EQ'].sum().to_frame()
 
-    excel_file = generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku_xls, pivot_banner_xls, df_raw)
+    excel_file = generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku_xls, pivot_banner_xls, df_raw, df_raw_all)
     st.sidebar.download_button(f"📥 Télécharger Rapport {page} (Excel)", data=excel_file, file_name=f"Rapport_{page}_{date.today()}.xlsx")
 
     # --- TOP BANNIÈRES ET CLIENTS ---
