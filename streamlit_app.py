@@ -639,6 +639,18 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
                         actual_sg4pack_mapping[item_name] = abbr
                         break
 
+            # Afficher les ItemName détectés pour validation
+            print("\n" + "="*100)
+            print("📋 SG 4-PACK ITEMNAME DÉTECTÉS (Flexible Keyword Matching)")
+            print("="*100)
+            for abbr in ['BLO', 'IPA', 'ROU', 'BLA']:
+                items = [item for item, a in actual_sg4pack_mapping.items() if a == abbr]
+                if items:
+                    print(f"\n{abbr}:")
+                    for item in items:
+                        print(f"   • {item}")
+            print("\n" + "="*100 + "\n")
+
         if df_raw_with_2024 is not None and not df_raw_with_2024.empty and 'GroupName' in df_raw_with_2024.columns and 'CardCode' in df_raw_with_2024.columns and actual_sg4pack_mapping:
             # Identifier magasins ayant commandé en JUL-SEPT 2025
             df_base_2025 = df_raw_with_2024[
@@ -686,12 +698,21 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
                     # Caisses SEPT 2026
                     caisses_2026_sept = df_2026_sku[df_2026_sku['DateAnalyse'].dt.month == 9]['CAISSE EQ'].sum()
 
-                    # Date dernière commande
-                    last_date = df_2026_sku['DateAnalyse'].max() if not df_2026_sku.empty else None
+                    # Date dernière commande (sur TOUT l'historique 2025 + 2026)
+                    df_all_sku = df_raw_with_2024[
+                        (df_raw_with_2024['CardCode'] == card_code) &
+                        (df_raw_with_2024['ItemName'] == sku_name)
+                    ]
+                    last_date = df_all_sku['DateAnalyse'].max() if not df_all_sku.empty else None
 
-                    # Déterminer statut
-                    if caisses_2026_summer == 0:
+                    # Caisses en octobre 2026
+                    caisses_2026_oct = df_2026_sku[df_2026_sku['DateAnalyse'].dt.month == 10]['CAISSE EQ'].sum()
+
+                    # Déterminer statut (en utilisant toutes les données disponibles)
+                    if caisses_2026_summer == 0 and caisses_2026_oct == 0:
                         statut = "Perdu"
+                    elif caisses_2026_summer == 0 and caisses_2026_oct > 0:
+                        statut = "Recommandé en oct."
                     elif caisses_2026_sept == 0 and caisses_2026_summer > 0:
                         statut = "À risque"
                     elif caisses_2026_summer < (caisses_2025_summer * 0.5):
@@ -710,11 +731,14 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
                     other_products_yn = "Oui" if not other_products.empty else "Non"
                     other_products_caisses = other_products['CAISSE EQ'].sum()
 
-                    # Ultra depuis juin 2026
+                    # Déterminer "Type de perte"
+                    type_perte = "Perte de tablette" if other_products_yn == "Oui" else "Client perdu"
+
+                    # Ultra depuis juin 2026 (cherche simplement "ULTRA" dans ItemName)
                     ultra_caisses = df_raw_with_2024[
                         (df_raw_with_2024['CardCode'] == card_code) &
                         (df_raw_with_2024['Année'] == 2026) &
-                        (df_raw_with_2024['ItemName'].str.contains('ULTRA.*BLONDE.*SANS', case=False, na=False)) &
+                        (df_raw_with_2024['ItemName'].str.contains('ULTRA', case=False, na=False)) &
                         (df_raw_with_2024['DateAnalyse'] >= pd.Timestamp('2026-06-01'))
                     ]['CAISSE EQ'].sum()
 
@@ -739,6 +763,7 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
                         'Caisses 2026 (SEPT)': int(caisses_2026_sept),
                         'Dernière commande': last_date,
                         'Statut': statut,
+                        'Type de perte': type_perte,
                         'Autres produits': f"{other_products_yn} ({int(other_products_caisses)} caisses)",
                         'Ultra depuis juin 2026': int(ultra_caisses),
                         'SG&SA depuis juin 2026': int(sg_sa_caisses),
@@ -795,45 +820,37 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
                     ws_lost.set_column(8, 8, 12)  # Caisses 2026 SEPT
                     ws_lost.set_column(9, 9, 15)  # Dernière commande
                     ws_lost.set_column(10, 10, 18) # Statut
-                    ws_lost.set_column(11, 11, 20) # Autres produits
-                    ws_lost.set_column(12, 12, 12) # Ultra
-                    ws_lost.set_column(13, 13, 12) # SG&SA
+                    ws_lost.set_column(11, 11, 20) # Type de perte
+                    ws_lost.set_column(12, 12, 20) # Autres produits
+                    ws_lost.set_column(13, 13, 12) # Ultra
+                    ws_lost.set_column(14, 14, 12) # SG&SA
 
         # --- VALIDATION: Afficher les comptes de magasins pour bannieres spécifiques ---
         print("\n" + "="*100)
-        print("📊 VALIDATION: COMPTES DE MAGASINS DISTINCTS")
+        print("📊 VALIDATION: COMPTES DE MAGASINS DISTINCTS - IGA CORPORATIF")
         print("="*100)
 
-        # Validation: Comptes de magasins SG 4Pack pour IGA CORPORATIF
-        sg4pack_validation = {
-            'CS DE 12 BLONDE SANS GLUTEN 4 PACK': 'BLO',
-            'CS DE 12 IPA SANS GLUTEN 4 PACK': 'IPA',
-            'CS DE 12 ROUSSE SANS GLUTEN 4 PACK': 'ROU',
-            'CS DE 12 BLANCHE SANS GLUTEN 4 PACK': 'BLA',
-        }
-
-        if not df_raw_with_2024.empty and 'GroupName' in df_raw_with_2024.columns:
-            print("\n✓ IGA CORPORATIF - Magasins ayant commandé en SEPTEMBRE (validation SG Nb Magasins):")
+        # Validation: Comptes de magasins SG 4Pack pour IGA CORPORATIF (utilise actual_sg4pack_mapping)
+        if not df_raw_with_2024.empty and 'GroupName' in df_raw_with_2024.columns and actual_sg4pack_mapping:
+            print("\n✓ IGA CORPORATIF - Magasins ayant commandé en SEPTEMBRE 2025 (comparaison avec SG Nb Magasins):")
             print("-" * 100)
+            print("   SKU:  SEPT 2025  vs  SG Nb Magasins")
 
             df_iga_2025 = df_raw_with_2024[
                 (df_raw_with_2024['GroupName'].apply(normaliser_banniere) == 'IGA CORPORATIF') &
                 (df_raw_with_2024['Année'] == 2025) &
                 (df_raw_with_2024['DateAnalyse'].dt.month == 9) &
-                (df_raw_with_2024['ItemName'].isin(sg4pack_validation.keys()))
+                (df_raw_with_2024['ItemName'].isin(actual_sg4pack_mapping.keys()))
             ]
 
-            df_iga_2026 = df_raw_with_2024[
-                (df_raw_with_2024['GroupName'].apply(normaliser_banniere) == 'IGA CORPORATIF') &
-                (df_raw_with_2024['Année'] == 2026) &
-                (df_raw_with_2024['DateAnalyse'].dt.month == 9) &
-                (df_raw_with_2024['ItemName'].isin(sg4pack_validation.keys()))
-            ]
+            # Références attendues (SG Nb Magasins)
+            sg_nb_magasins = {'BLO': 137, 'IPA': 114, 'ROU': 102, 'BLA': 80}
 
-            for sku_name, sku_abbr in sg4pack_validation.items():
+            for sku_name, sku_abbr in actual_sg4pack_mapping.items():
                 count_2025 = df_iga_2025[df_iga_2025['ItemName'] == sku_name]['CardCode'].nunique()
-                count_2026 = df_iga_2026[df_iga_2026['ItemName'] == sku_name]['CardCode'].nunique()
-                print(f"   • {sku_abbr:4}: {count_2025:3} magasins (SEPT 2025) → {count_2026:3} magasins (SEPT 2026)")
+                expected = sg_nb_magasins.get(sku_abbr, '?')
+                match = "✓" if count_2025 == expected else "✗"
+                print(f"   {sku_abbr:4}: {count_2025:3} magasins  vs  {expected}  {match}")
 
         # Compter les magasins pour ULTRA BLONDE SA et SANS GLUTEN & SANS ALCOOL
         if not df_ultra_blonde_sa.empty and 'CardCode' in df_ultra_blonde_sa.columns:
