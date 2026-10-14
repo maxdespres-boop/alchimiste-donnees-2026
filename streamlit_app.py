@@ -619,36 +619,51 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
 
         # --- NOUVEL ONGLET: SG MAGASINS PERDUS (Rétention et statut des magasins) ---
         # SKU 4-pack sans gluten à analyser (BLO, IPA, ROU, BLA)
-        # Flexible keyword matching: chercher ItemName contenant les mots-clés
-        sg4pack_keywords = {
-            ('BLONDE', 'SANS GLUTEN', '4 PACK'): 'BLO',
-            ('IPA', 'SANS GLUTEN', '4 PACK'): 'IPA',
-            ('ROUSSE', 'SANS GLUTEN', '4 PACK'): 'ROU',
-            ('BLANCHE', 'SANS GLUTEN', '4 PACK'): 'BLA',
+        # Extraction SKU: derniers 3 caractères de ItemName (format: ** SANS GLUTEN ** 4 PACK ** XXX)
+        sku_code_mapping = {
+            'BLO': 'Blonde',
+            'IPA': 'IPA',
+            'ROU': 'Rousse',
+            'BLA': 'Blanche',
         }
 
         # Construire mapping dynamique des ItemName réelles
         actual_sg4pack_mapping = {}
+        unmatched_items = []
+
         if df_raw_with_2024 is not None and not df_raw_with_2024.empty and 'ItemName' in df_raw_with_2024.columns:
             for item_name in df_raw_with_2024['ItemName'].unique():
                 if pd.isna(item_name):
                     continue
                 item_name_str = str(item_name).upper()
-                for keywords_tuple, abbr in sg4pack_keywords.items():
-                    if all(keyword in item_name_str for keyword in keywords_tuple):
-                        actual_sg4pack_mapping[item_name] = abbr
-                        break
+
+                # Vérifier que l'ItemName contient SANS GLUTEN ET 4 PACK
+                if 'SANS GLUTEN' in item_name_str and '4 PACK' in item_name_str:
+                    # Extraire les 3 derniers caractères du ItemName
+                    sku_code = item_name_str[-3:].strip()
+
+                    if sku_code in sku_code_mapping:
+                        actual_sg4pack_mapping[item_name] = sku_code
+                    else:
+                        actual_sg4pack_mapping[item_name] = 'Autre'
+                        unmatched_items.append((item_name, sku_code))
 
             # Afficher les ItemName détectés pour validation
             print("\n" + "="*100)
-            print("📋 SG 4-PACK ITEMNAME DÉTECTÉS (Flexible Keyword Matching)")
+            print("📋 SG 4-PACK ITEMNAME DÉTECTÉS (Extraction SKU - 3 derniers caractères)")
             print("="*100)
             for abbr in ['BLO', 'IPA', 'ROU', 'BLA']:
                 items = [item for item, a in actual_sg4pack_mapping.items() if a == abbr]
                 if items:
-                    print(f"\n{abbr}:")
+                    print(f"\n{abbr} ({len(items)} item(s)):")
                     for item in items:
                         print(f"   • {item}")
+
+            if unmatched_items:
+                print(f"\nAutre ({len(unmatched_items)} item(s) - codes non reconnus):")
+                for item, code in unmatched_items:
+                    print(f"   • {item} (code: '{code}')")
+
             print("\n" + "="*100 + "\n")
 
         if df_raw_with_2024 is not None and not df_raw_with_2024.empty and 'GroupName' in df_raw_with_2024.columns and 'CardCode' in df_raw_with_2024.columns and actual_sg4pack_mapping:
@@ -671,7 +686,8 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
                     banner = store_info['GroupName_Norm']
                     card_name = store_info.get('CardName', card_code)
                     city = store_info.get('CityS', '')
-                    sku_abbr = actual_sg4pack_mapping.get(sku_name, '???')
+                    sku_code = actual_sg4pack_mapping.get(sku_name, 'Autre')
+                    sku_abbr = sku_code_mapping.get(sku_code, sku_code) if sku_code != 'Autre' else 'Autre'
 
                     # Caisses JUL-SEPT 2025
                     caisses_2025_summer = group_2025['CAISSE EQ'].sum()
@@ -827,12 +843,23 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
 
         # --- VALIDATION: Afficher les comptes de magasins pour bannieres spécifiques ---
         print("\n" + "="*100)
-        print("📊 VALIDATION: COMPTES DE MAGASINS DISTINCTS - IGA CORPORATIF")
+        print("📊 VALIDATION: SG 4-PACK DATA")
         print("="*100)
+
+        # Validation: Comptes de lignes par SKU
+        if actual_sg4pack_mapping:
+            print("\n📈 Répartition des lignes par SKU (dans df_base_2025):")
+            print("-" * 100)
+            for sku_code in ['BLO', 'IPA', 'ROU', 'BLA', 'Autre']:
+                items_for_code = [item for item, code in actual_sg4pack_mapping.items() if code == sku_code]
+                if items_for_code:
+                    line_count = len(df_base_2025[df_base_2025['ItemName'].isin(items_for_code)]) if 'df_base_2025' in locals() and not df_base_2025.empty else 0
+                    print(f"   {sku_code:10}: {line_count:4} lignes  ({len(items_for_code)} ItemName(s))")
+            print()
 
         # Validation: Comptes de magasins SG 4Pack pour IGA CORPORATIF (utilise actual_sg4pack_mapping)
         if not df_raw_with_2024.empty and 'GroupName' in df_raw_with_2024.columns and actual_sg4pack_mapping:
-            print("\n✓ IGA CORPORATIF - Magasins ayant commandé en SEPTEMBRE 2025 (comparaison avec SG Nb Magasins):")
+            print("✓ IGA CORPORATIF - Magasins ayant commandé en SEPTEMBRE 2025 (comparaison avec SG Nb Magasins):")
             print("-" * 100)
             print("   SKU:  SEPT 2025  vs  SG Nb Magasins")
 
@@ -846,11 +873,14 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
             # Références attendues (SG Nb Magasins)
             sg_nb_magasins = {'BLO': 137, 'IPA': 114, 'ROU': 102, 'BLA': 80}
 
-            for sku_name, sku_abbr in actual_sg4pack_mapping.items():
-                count_2025 = df_iga_2025[df_iga_2025['ItemName'] == sku_name]['CardCode'].nunique()
-                expected = sg_nb_magasins.get(sku_abbr, '?')
+            # Compter par SKU code
+            for sku_code in ['BLO', 'IPA', 'ROU', 'BLA']:
+                # Trouver tous les ItemNames qui correspondent à ce code
+                items_for_code = [item for item, code in actual_sg4pack_mapping.items() if code == sku_code]
+                count_2025 = df_iga_2025[df_iga_2025['ItemName'].isin(items_for_code)]['CardCode'].nunique()
+                expected = sg_nb_magasins.get(sku_code, '?')
                 match = "✓" if count_2025 == expected else "✗"
-                print(f"   {sku_abbr:4}: {count_2025:3} magasins  vs  {expected}  {match}")
+                print(f"   {sku_code:4}: {count_2025:3} magasins  vs  {expected}  {match}")
 
         # Compter les magasins pour ULTRA BLONDE SA et SANS GLUTEN & SANS ALCOOL
         if not df_ultra_blonde_sa.empty and 'CardCode' in df_ultra_blonde_sa.columns:
