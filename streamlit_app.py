@@ -176,6 +176,12 @@ def corriger_sku_sans_alcool(row):
 # --- EXCEL PRO ---
 def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_banner, df_raw, df_raw_all=None):
     output = io.BytesIO()
+    # Créer df_raw_with_2024 avant le writer pour l'utiliser dans les nouveaux onglets
+    if df_raw_all is not None and not df_raw_all.empty:
+        df_raw_with_2024 = df_raw_all[df_raw_all['DateAnalyse'].dt.year >= 2024].copy()
+    else:
+        df_raw_with_2024 = None
+
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         workbook = writer.book
         fmt_money = workbook.add_format({'num_format': '#,##0.00 $'})
