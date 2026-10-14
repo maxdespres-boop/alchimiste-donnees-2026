@@ -605,10 +605,210 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
                     excel_col = i + 1
                     ws_sg_sa.set_column(excel_col, excel_col, 16, fmt_qty)
 
+        # --- NOUVEL ONGLET: SG MAGASINS PERDUS (Rétention et statut des magasins) ---
+        # SKU 4-pack sans gluten à analyser (BLO, IPA, ROU, BLA)
+        sg4pack_mapping = {
+            'CS DE 12 BLONDE SANS GLUTEN 4 PACK': 'BLO',
+            'CS DE 12 IPA SANS GLUTEN 4 PACK': 'IPA',
+            'CS DE 12 ROUSSE SANS GLUTEN 4 PACK': 'ROU',
+            'CS DE 12 BLANCHE SANS GLUTEN 4 PACK': 'BLA',
+        }
+
+        if not df_raw_with_2024.empty and 'GroupName' in df_raw_with_2024.columns and 'CardCode' in df_raw_with_2024.columns:
+            # Identifier magasins ayant commandé en JUL-SEPT 2025
+            df_base_2025 = df_raw_with_2024[
+                (df_raw_with_2024['Année'] == 2025) &
+                (df_raw_with_2024['ItemName'].isin(sg4pack_mapping.keys())) &
+                (df_raw_with_2024['DateAnalyse'].dt.month.isin([7, 8, 9]))
+            ].copy()
+
+            df_base_2025['GroupName_Norm'] = df_base_2025['GroupName'].apply(normaliser_banniere)
+            df_base_2025['YearMonth'] = df_base_2025['DateAnalyse'].dt.strftime('%Y-%m')
+
+            if not df_base_2025.empty:
+                # Construire la liste des magasins × SKU
+                results_lost = []
+
+                for (card_code, sku_name), group_2025 in df_base_2025.groupby(['CardCode', 'ItemName']):
+                    store_info = group_2025.iloc[0]
+                    banner = store_info['GroupName_Norm']
+                    card_name = store_info.get('CardName', card_code)
+                    city = store_info.get('CityS', '')
+                    sku_abbr = sg4pack_mapping.get(sku_name, '???')
+
+                    # Caisses JUL-SEPT 2025
+                    caisses_2025_summer = group_2025['CAISSE EQ'].sum()
+
+                    # Caisses SEPT 2025
+                    caisses_2025_sept = df_raw_with_2024[
+                        (df_raw_with_2024['CardCode'] == card_code) &
+                        (df_raw_with_2024['ItemName'] == sku_name) &
+                        (df_raw_with_2024['Année'] == 2025) &
+                        (df_raw_with_2024['DateAnalyse'].dt.month == 9)
+                    ]['CAISSE EQ'].sum()
+
+                    # Données 2026
+                    df_2026_sku = df_raw_with_2024[
+                        (df_raw_with_2024['CardCode'] == card_code) &
+                        (df_raw_with_2024['ItemName'] == sku_name) &
+                        (df_raw_with_2024['Année'] == 2026)
+                    ]
+
+                    # Caisses JUL-SEPT 2026
+                    df_2026_summer = df_2026_sku[df_2026_sku['DateAnalyse'].dt.month.isin([7, 8, 9])]
+                    caisses_2026_summer = df_2026_summer['CAISSE EQ'].sum()
+
+                    # Caisses SEPT 2026
+                    caisses_2026_sept = df_2026_sku[df_2026_sku['DateAnalyse'].dt.month == 9]['CAISSE EQ'].sum()
+
+                    # Date dernière commande
+                    last_date = df_2026_sku['DateAnalyse'].max() if not df_2026_sku.empty else None
+
+                    # Déterminer statut
+                    if caisses_2026_summer == 0:
+                        statut = "Perdu"
+                    elif caisses_2026_sept == 0 and caisses_2026_summer > 0:
+                        statut = "À risque"
+                    elif caisses_2026_summer < (caisses_2025_summer * 0.5):
+                        statut = "Actif en baisse"
+                    else:
+                        statut = "Actif"
+
+                    # Autres produits Alchimiste depuis août 2026
+                    other_products = df_raw_with_2024[
+                        (df_raw_with_2024['CardCode'] == card_code) &
+                        (df_raw_with_2024['Année'] == 2026) &
+                        (~df_raw_with_2024['ItemName'].isin(sg4pack_mapping.keys())) &
+                        (df_raw_with_2024['DateAnalyse'] >= pd.Timestamp('2026-08-01'))
+                    ]
+
+                    other_products_yn = "Oui" if not other_products.empty else "Non"
+                    other_products_caisses = other_products['CAISSE EQ'].sum()
+
+                    # Ultra depuis juin 2026
+                    ultra_caisses = df_raw_with_2024[
+                        (df_raw_with_2024['CardCode'] == card_code) &
+                        (df_raw_with_2024['Année'] == 2026) &
+                        (df_raw_with_2024['ItemName'].str.contains('ULTRA.*BLONDE.*SANS', case=False, na=False)) &
+                        (df_raw_with_2024['DateAnalyse'] >= pd.Timestamp('2026-06-01'))
+                    ]['CAISSE EQ'].sum()
+
+                    # SG&SA depuis juin 2026
+                    sg_sa_caisses = df_raw_with_2024[
+                        (df_raw_with_2024['CardCode'] == card_code) &
+                        (df_raw_with_2024['Année'] == 2026) &
+                        (df_raw_with_2024['ItemName'].str.contains('SANS GLUTEN', case=False, na=False)) &
+                        (df_raw_with_2024['ItemName'].str.contains('SANS ALCOOL', case=False, na=False)) &
+                        (df_raw_with_2024['DateAnalyse'] >= pd.Timestamp('2026-06-01'))
+                    ]['CAISSE EQ'].sum()
+
+                    results_lost.append({
+                        'Bannière': banner,
+                        'Code client': card_code,
+                        'Magasin': card_name,
+                        'Ville': city,
+                        'SKU': sku_abbr,
+                        'Caisses 2025 (JUL-SEPT)': int(caisses_2025_summer),
+                        'Caisses 2026 (JUL-SEPT)': int(caisses_2026_summer),
+                        'Caisses 2025 (SEPT)': int(caisses_2025_sept),
+                        'Caisses 2026 (SEPT)': int(caisses_2026_sept),
+                        'Dernière commande': last_date,
+                        'Statut': statut,
+                        'Autres produits': f"{other_products_yn} ({int(other_products_caisses)} caisses)",
+                        'Ultra depuis juin 2026': int(ultra_caisses),
+                        'SG&SA depuis juin 2026': int(sg_sa_caisses),
+                    })
+
+                if results_lost:
+                    df_lost_stores = pd.DataFrame(results_lost)
+
+                    # Tri: bannière (IGA/MÉTRO en premier), statut, caisses 2025 décroissantes
+                    priority_banners = ['IGA CORPORATIF', 'MÉTRO FRANCHISÉ -CO']
+                    df_lost_stores['Banner_Priority'] = df_lost_stores['Bannière'].apply(
+                        lambda x: priority_banners.index(x) if x in priority_banners else 100
+                    )
+                    statut_priority = {'Perdu': 0, 'À risque': 1, 'Actif en baisse': 2, 'Actif': 3}
+                    df_lost_stores['Statut_Priority'] = df_lost_stores['Statut'].map(statut_priority)
+
+                    df_lost_stores = df_lost_stores.sort_values(
+                        by=['Banner_Priority', 'Statut_Priority', 'Caisses 2025 (JUL-SEPT)'],
+                        ascending=[True, True, False]
+                    ).drop(columns=['Banner_Priority', 'Statut_Priority'])
+
+                    # Tableau récapitulatif
+                    summary_data = []
+                    for (banner, sku, statut), count in df_lost_stores.groupby(['Bannière', 'SKU', 'Statut']).size().items():
+                        summary_data.append({
+                            'Bannière': banner,
+                            'SKU': sku,
+                            'Perdu': int(count) if statut == 'Perdu' else 0,
+                            'À risque': int(count) if statut == 'À risque' else 0,
+                            'Actif en baisse': int(count) if statut == 'Actif en baisse' else 0,
+                            'Actif': int(count) if statut == 'Actif' else 0,
+                        })
+
+                    df_summary = pd.DataFrame(summary_data)
+                    df_summary = df_summary.groupby(['Bannière', 'SKU']).sum()
+
+                    # Sauvegarder sur deux sheets
+                    df_summary.to_excel(writer, sheet_name='SG Magasins perdus - Résumé')
+                    ws_summary = writer.sheets['SG Magasins perdus - Résumé']
+                    ws_summary.set_column(0, 0, 25)
+                    for i in range(len(df_summary.columns)):
+                        ws_summary.set_column(i + 1, i + 1, 12, fmt_qty)
+
+                    df_lost_stores.to_excel(writer, sheet_name='SG Magasins perdus', index=False)
+                    ws_lost = writer.sheets['SG Magasins perdus']
+                    ws_lost.set_column(0, 0, 20)  # Bannière
+                    ws_lost.set_column(1, 1, 15)  # Code client
+                    ws_lost.set_column(2, 2, 25)  # Magasin
+                    ws_lost.set_column(3, 3, 15)  # Ville
+                    ws_lost.set_column(4, 4, 6)   # SKU
+                    ws_lost.set_column(5, 5, 12)  # Caisses 2025 JUL-SEPT
+                    ws_lost.set_column(6, 6, 12)  # Caisses 2026 JUL-SEPT
+                    ws_lost.set_column(7, 7, 12)  # Caisses 2025 SEPT
+                    ws_lost.set_column(8, 8, 12)  # Caisses 2026 SEPT
+                    ws_lost.set_column(9, 9, 15)  # Dernière commande
+                    ws_lost.set_column(10, 10, 18) # Statut
+                    ws_lost.set_column(11, 11, 20) # Autres produits
+                    ws_lost.set_column(12, 12, 12) # Ultra
+                    ws_lost.set_column(13, 13, 12) # SG&SA
+
         # --- VALIDATION: Afficher les comptes de magasins pour bannieres spécifiques ---
         print("\n" + "="*100)
         print("📊 VALIDATION: COMPTES DE MAGASINS DISTINCTS")
         print("="*100)
+
+        # Validation: Comptes de magasins SG 4Pack pour IGA CORPORATIF
+        sg4pack_validation = {
+            'CS DE 12 BLONDE SANS GLUTEN 4 PACK': 'BLO',
+            'CS DE 12 IPA SANS GLUTEN 4 PACK': 'IPA',
+            'CS DE 12 ROUSSE SANS GLUTEN 4 PACK': 'ROU',
+            'CS DE 12 BLANCHE SANS GLUTEN 4 PACK': 'BLA',
+        }
+
+        if not df_raw_with_2024.empty and 'GroupName' in df_raw_with_2024.columns:
+            print("\n✓ IGA CORPORATIF - Magasins ayant commandé en SEPTEMBRE (validation SG Nb Magasins):")
+            print("-" * 100)
+
+            df_iga_2025 = df_raw_with_2024[
+                (df_raw_with_2024['GroupName'].apply(normaliser_banniere) == 'IGA CORPORATIF') &
+                (df_raw_with_2024['Année'] == 2025) &
+                (df_raw_with_2024['DateAnalyse'].dt.month == 9) &
+                (df_raw_with_2024['ItemName'].isin(sg4pack_validation.keys()))
+            ]
+
+            df_iga_2026 = df_raw_with_2024[
+                (df_raw_with_2024['GroupName'].apply(normaliser_banniere) == 'IGA CORPORATIF') &
+                (df_raw_with_2024['Année'] == 2026) &
+                (df_raw_with_2024['DateAnalyse'].dt.month == 9) &
+                (df_raw_with_2024['ItemName'].isin(sg4pack_validation.keys()))
+            ]
+
+            for sku_name, sku_abbr in sg4pack_validation.items():
+                count_2025 = df_iga_2025[df_iga_2025['ItemName'] == sku_name]['CardCode'].nunique()
+                count_2026 = df_iga_2026[df_iga_2026['ItemName'] == sku_name]['CardCode'].nunique()
+                print(f"   • {sku_abbr:4}: {count_2025:3} magasins (SEPT 2025) → {count_2026:3} magasins (SEPT 2026)")
 
         # Compter les magasins pour ULTRA BLONDE SA et SANS GLUTEN & SANS ALCOOL
         if not df_ultra_blonde_sa.empty and 'CardCode' in df_ultra_blonde_sa.columns:
