@@ -858,7 +858,7 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
             print()
 
         # Validation: Comptes de magasins SG 4Pack pour IGA CORPORATIF (utilise actual_sg4pack_mapping)
-        if not df_raw_with_2024.empty and 'GroupName' in df_raw_with_2024.columns and actual_sg4pack_mapping:
+        if df_raw_with_2024 is not None and not df_raw_with_2024.empty and 'GroupName' in df_raw_with_2024.columns and actual_sg4pack_mapping:
             print("✓ IGA CORPORATIF - Magasins ayant commandé en SEPTEMBRE 2025 (comparaison avec SG Nb Magasins):")
             print("-" * 100)
             print("   SKU:  SEPT 2025  vs  SG Nb Magasins")
