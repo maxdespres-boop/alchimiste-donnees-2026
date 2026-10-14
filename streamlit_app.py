@@ -619,18 +619,31 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
 
         # --- NOUVEL ONGLET: SG MAGASINS PERDUS (Rétention et statut des magasins) ---
         # SKU 4-pack sans gluten à analyser (BLO, IPA, ROU, BLA)
-        sg4pack_mapping = {
-            'CS DE 12 BLONDE SANS GLUTEN 4 PACK': 'BLO',
-            'CS DE 12 IPA SANS GLUTEN 4 PACK': 'IPA',
-            'CS DE 12 ROUSSE SANS GLUTEN 4 PACK': 'ROU',
-            'CS DE 12 BLANCHE SANS GLUTEN 4 PACK': 'BLA',
+        # Flexible keyword matching: chercher ItemName contenant les mots-clés
+        sg4pack_keywords = {
+            ('BLONDE', 'SANS GLUTEN', '4 PACK'): 'BLO',
+            ('IPA', 'SANS GLUTEN', '4 PACK'): 'IPA',
+            ('ROUSSE', 'SANS GLUTEN', '4 PACK'): 'ROU',
+            ('BLANCHE', 'SANS GLUTEN', '4 PACK'): 'BLA',
         }
 
-        if df_raw_with_2024 is not None and not df_raw_with_2024.empty and 'GroupName' in df_raw_with_2024.columns and 'CardCode' in df_raw_with_2024.columns:
+        # Construire mapping dynamique des ItemName réelles
+        actual_sg4pack_mapping = {}
+        if df_raw_with_2024 is not None and not df_raw_with_2024.empty and 'ItemName' in df_raw_with_2024.columns:
+            for item_name in df_raw_with_2024['ItemName'].unique():
+                if pd.isna(item_name):
+                    continue
+                item_name_str = str(item_name).upper()
+                for keywords_tuple, abbr in sg4pack_keywords.items():
+                    if all(keyword in item_name_str for keyword in keywords_tuple):
+                        actual_sg4pack_mapping[item_name] = abbr
+                        break
+
+        if df_raw_with_2024 is not None and not df_raw_with_2024.empty and 'GroupName' in df_raw_with_2024.columns and 'CardCode' in df_raw_with_2024.columns and actual_sg4pack_mapping:
             # Identifier magasins ayant commandé en JUL-SEPT 2025
             df_base_2025 = df_raw_with_2024[
                 (df_raw_with_2024['Année'] == 2025) &
-                (df_raw_with_2024['ItemName'].isin(sg4pack_mapping.keys())) &
+                (df_raw_with_2024['ItemName'].isin(actual_sg4pack_mapping.keys())) &
                 (df_raw_with_2024['DateAnalyse'].dt.month.isin([7, 8, 9]))
             ].copy()
 
@@ -646,7 +659,7 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
                     banner = store_info['GroupName_Norm']
                     card_name = store_info.get('CardName', card_code)
                     city = store_info.get('CityS', '')
-                    sku_abbr = sg4pack_mapping.get(sku_name, '???')
+                    sku_abbr = actual_sg4pack_mapping.get(sku_name, '???')
 
                     # Caisses JUL-SEPT 2025
                     caisses_2025_summer = group_2025['CAISSE EQ'].sum()
@@ -690,7 +703,7 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
                     other_products = df_raw_with_2024[
                         (df_raw_with_2024['CardCode'] == card_code) &
                         (df_raw_with_2024['Année'] == 2026) &
-                        (~df_raw_with_2024['ItemName'].isin(sg4pack_mapping.keys())) &
+                        (~df_raw_with_2024['ItemName'].isin(actual_sg4pack_mapping.keys())) &
                         (df_raw_with_2024['DateAnalyse'] >= pd.Timestamp('2026-08-01'))
                     ]
 
