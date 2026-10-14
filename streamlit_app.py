@@ -183,6 +183,12 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
         fmt_perc  = workbook.add_format({'num_format': '0.0%'})
         fmt_text  = workbook.add_format({'bold': False})
 
+        # Créer df_raw_with_2024 si df_raw_all est disponible (pour les nouveaux onglets comme SG Magasins perdus)
+        if df_raw_all is not None and not df_raw_all.empty:
+            df_raw_with_2024 = df_raw_all[df_raw_all['DateAnalyse'].dt.year >= 2024].copy()
+        else:
+            df_raw_with_2024 = None
+
         def save_sheet(df, name, is_money=False, add_row_total=True, with_gamme=False):
             df_t = df.copy()
             if with_gamme:
@@ -614,7 +620,7 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
             'CS DE 12 BLANCHE SANS GLUTEN 4 PACK': 'BLA',
         }
 
-        if not df_raw_with_2024.empty and 'GroupName' in df_raw_with_2024.columns and 'CardCode' in df_raw_with_2024.columns:
+        if df_raw_with_2024 is not None and not df_raw_with_2024.empty and 'GroupName' in df_raw_with_2024.columns and 'CardCode' in df_raw_with_2024.columns:
             # Identifier magasins ayant commandé en JUL-SEPT 2025
             df_base_2025 = df_raw_with_2024[
                 (df_raw_with_2024['Année'] == 2025) &
