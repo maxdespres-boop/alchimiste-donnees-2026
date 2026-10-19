@@ -681,6 +681,42 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
                 # Construire la liste des magasins × SKU
                 results_lost = []
 
+                # --- Pré-calculs: une seule passe sur les données (au lieu de filtrer tout le tableau pour chaque magasin × SKU) ---
+                sg_keys = list(actual_sg4pack_mapping.keys())
+                df_sg_all = df_raw_with_2024[df_raw_with_2024['ItemName'].isin(sg_keys)].copy()
+                sg_year = df_sg_all['Année']
+                sg_month = df_sg_all['DateAnalyse'].dt.month
+                sg_caisse = df_sg_all['CAISSE EQ']
+                df_sg_all['_c25_sept'] = sg_caisse.where((sg_year == 2025) & (sg_month == 9), 0)
+                df_sg_all['_c26_summer'] = sg_caisse.where((sg_year == 2026) & sg_month.isin([7, 8, 9]), 0)
+                df_sg_all['_c26_sept'] = sg_caisse.where((sg_year == 2026) & (sg_month == 9), 0)
+                df_sg_all['_c26_oct'] = sg_caisse.where((sg_year == 2026) & (sg_month == 10), 0)
+                agg_sku = df_sg_all.groupby(['CardCode', 'ItemName']).agg(
+                    c25_sept=('_c25_sept', 'sum'),
+                    c26_summer=('_c26_summer', 'sum'),
+                    c26_sept=('_c26_sept', 'sum'),
+                    c26_oct=('_c26_oct', 'sum'),
+                    last_date=('DateAnalyse', 'max'),
+                )
+
+                # Autres produits Alchimiste depuis août 2026 (par magasin)
+                df_other_26 = df_raw_with_2024[
+                    (df_raw_with_2024['Année'] == 2026) &
+                    (~df_raw_with_2024['ItemName'].isin(sg_keys)) &
+                    (df_raw_with_2024['DateAnalyse'] >= pd.Timestamp('2026-08-01'))
+                ]
+                agg_other = df_other_26.groupby('CardCode')['CAISSE EQ'].agg(['size', 'sum'])
+
+                # Ultra et SG&SA depuis juin 2026 (par magasin)
+                mask_juin_26 = (df_raw_with_2024['Année'] == 2026) & (df_raw_with_2024['DateAnalyse'] >= pd.Timestamp('2026-06-01'))
+                mask_ultra = df_raw_with_2024['ItemName'].str.contains('ULTRA', case=False, na=False)
+                mask_sg_sa = (
+                    df_raw_with_2024['ItemName'].str.contains('SANS GLUTEN', case=False, na=False) &
+                    df_raw_with_2024['ItemName'].str.contains('SANS ALCOOL', case=False, na=False)
+                )
+                ultra_by_card = df_raw_with_2024[mask_juin_26 & mask_ultra].groupby('CardCode')['CAISSE EQ'].sum()
+                sg_sa_by_card = df_raw_with_2024[mask_juin_26 & mask_sg_sa].groupby('CardCode')['CAISSE EQ'].sum()
+
                 for (card_code, sku_name), group_2025 in df_base_2025.groupby(['CardCode', 'ItemName']):
                     store_info = group_2025.iloc[0]
                     banner = store_info['GroupName_Norm']
@@ -692,39 +728,15 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
                     # Caisses JUL-SEPT 2025
                     caisses_2025_summer = group_2025['CAISSE EQ'].sum()
 
-                    # Caisses SEPT 2025
-                    caisses_2025_sept = df_raw_with_2024[
-                        (df_raw_with_2024['CardCode'] == card_code) &
-                        (df_raw_with_2024['ItemName'] == sku_name) &
-                        (df_raw_with_2024['Année'] == 2025) &
-                        (df_raw_with_2024['DateAnalyse'].dt.month == 9)
-                    ]['CAISSE EQ'].sum()
+                    # Caisses et dates par magasin × SKU (pré-calculées)
+                    row_sku = agg_sku.loc[(card_code, sku_name)]
+                    caisses_2025_sept = row_sku['c25_sept']
+                    caisses_2026_summer = row_sku['c26_summer']
+                    caisses_2026_sept = row_sku['c26_sept']
+                    caisses_2026_oct = row_sku['c26_oct']
+                    last_date = row_sku['last_date']
 
-                    # Données 2026
-                    df_2026_sku = df_raw_with_2024[
-                        (df_raw_with_2024['CardCode'] == card_code) &
-                        (df_raw_with_2024['ItemName'] == sku_name) &
-                        (df_raw_with_2024['Année'] == 2026)
-                    ]
-
-                    # Caisses JUL-SEPT 2026
-                    df_2026_summer = df_2026_sku[df_2026_sku['DateAnalyse'].dt.month.isin([7, 8, 9])]
-                    caisses_2026_summer = df_2026_summer['CAISSE EQ'].sum()
-
-                    # Caisses SEPT 2026
-                    caisses_2026_sept = df_2026_sku[df_2026_sku['DateAnalyse'].dt.month == 9]['CAISSE EQ'].sum()
-
-                    # Date dernière commande (sur TOUT l'historique 2025 + 2026)
-                    df_all_sku = df_raw_with_2024[
-                        (df_raw_with_2024['CardCode'] == card_code) &
-                        (df_raw_with_2024['ItemName'] == sku_name)
-                    ]
-                    last_date = df_all_sku['DateAnalyse'].max() if not df_all_sku.empty else None
-
-                    # Caisses en octobre 2026
-                    caisses_2026_oct = df_2026_sku[df_2026_sku['DateAnalyse'].dt.month == 10]['CAISSE EQ'].sum()
-
-                    # Déterminer statut (en utilisant toutes les données disponibles)
+                    # Déterminer statut
                     if caisses_2026_summer == 0 and caisses_2026_oct == 0:
                         statut = "Perdu"
                     elif caisses_2026_summer == 0 and caisses_2026_oct > 0:
@@ -736,36 +748,14 @@ def generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku, pivot_b
                     else:
                         statut = "Actif"
 
-                    # Autres produits Alchimiste depuis août 2026
-                    other_products = df_raw_with_2024[
-                        (df_raw_with_2024['CardCode'] == card_code) &
-                        (df_raw_with_2024['Année'] == 2026) &
-                        (~df_raw_with_2024['ItemName'].isin(actual_sg4pack_mapping.keys())) &
-                        (df_raw_with_2024['DateAnalyse'] >= pd.Timestamp('2026-08-01'))
-                    ]
-
-                    other_products_yn = "Oui" if not other_products.empty else "Non"
-                    other_products_caisses = other_products['CAISSE EQ'].sum()
+                    other_products_yn = "Oui" if agg_other['size'].get(card_code, 0) > 0 else "Non"
+                    other_products_caisses = agg_other['sum'].get(card_code, 0)
 
                     # Déterminer "Type de perte"
                     type_perte = "Perte de tablette" if other_products_yn == "Oui" else "Client perdu"
 
-                    # Ultra depuis juin 2026 (cherche simplement "ULTRA" dans ItemName)
-                    ultra_caisses = df_raw_with_2024[
-                        (df_raw_with_2024['CardCode'] == card_code) &
-                        (df_raw_with_2024['Année'] == 2026) &
-                        (df_raw_with_2024['ItemName'].str.contains('ULTRA', case=False, na=False)) &
-                        (df_raw_with_2024['DateAnalyse'] >= pd.Timestamp('2026-06-01'))
-                    ]['CAISSE EQ'].sum()
-
-                    # SG&SA depuis juin 2026
-                    sg_sa_caisses = df_raw_with_2024[
-                        (df_raw_with_2024['CardCode'] == card_code) &
-                        (df_raw_with_2024['Année'] == 2026) &
-                        (df_raw_with_2024['ItemName'].str.contains('SANS GLUTEN', case=False, na=False)) &
-                        (df_raw_with_2024['ItemName'].str.contains('SANS ALCOOL', case=False, na=False)) &
-                        (df_raw_with_2024['DateAnalyse'] >= pd.Timestamp('2026-06-01'))
-                    ]['CAISSE EQ'].sum()
+                    ultra_caisses = ultra_by_card.get(card_code, 0)
+                    sg_sa_caisses = sg_sa_by_card.get(card_code, 0)
 
                     results_lost.append({
                         'Bannière': banner,
