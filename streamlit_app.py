@@ -161,16 +161,20 @@ def harmoniser_formats_alc(row):
 
 # --- CORRECTION SKU SANS ALCOOL (BLONDE vs BLANCHE) ---
 def corriger_sku_sans_alcool(row):
+    # Regroupe les caisses de 12 sans alcool en 2 SKU (blonde / blanche).
+    # Les libellés changent entre 2025 et 2026 : "SANS ALCOOL B", "BLONDE SANS ALCOOL",
+    # "BLONDE BLONDE SANS ALCOOL", "S/A BLONDE", etc. Le code produit prime quand il est connu.
     code = str(row['ItemCode']).strip().upper()
     name = str(row['ItemName']).strip()
-    if 'SANS ALCOOL' not in name.upper():
+    up = name.upper()
+    if 'GLUTEN' in up:  # SG & SA (4-pack sans gluten) : on ne touche pas
         return name
-    if code == 'MABLONSA12':
-        import re
-        return re.sub(r'SANS ALCOOL\s*B?', 'BLONDE SANS ALCOOL', name, flags=re.IGNORECASE).strip()
-    elif code == 'MABLANSA12':
-        import re
-        return re.sub(r'SANS ALCOOL\s*B?', 'BLANCHE SANS ALCOOL', name, flags=re.IGNORECASE).strip()
+    if not ('SANS ALCOOL' in up or 'S/A' in up):
+        return name
+    if code == 'MABLONSA12' or ('CAISSE DE 12' in up and 'BLONDE' in up):
+        return 'CAISSE DE 12 BLONDE SANS ALCOOL'
+    if code == 'MABLANSA12' or ('CAISSE DE 12' in up and 'BLANCHE' in up):
+        return 'CAISSE DE 12 BLANCHE SANS ALCOOL'
     return name
 
 # --- EXCEL PRO ---
