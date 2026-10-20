@@ -1141,6 +1141,37 @@ if df_raw_all is not None:
     if excel_key in st.session_state:
         st.sidebar.download_button(f"📥 Télécharger Rapport {page} (Excel)", data=st.session_state[excel_key], file_name=f"Rapport_{page}_{date.today()}.xlsx")
 
+    # --- VENTES PAR REPRÉSENTANT (calcul seulement au clic) ---
+    with st.expander("🔎 Caisses vendues par représentant"):
+        if 'SalesEmployee' not in df_raw_with_2024.columns:
+            st.info("Colonne SalesEmployee absente des données.")
+        else:
+            reps = sorted(df_raw_with_2024['SalesEmployee'].dropna().astype(str).unique())
+            rep_defaut = reps.index("Lyne Brie") if "Lyne Brie" in reps else 0
+            rep_sel = st.selectbox("Représentant", reps, index=rep_defaut, key=f"rep_{page}")
+            since_sel = st.date_input("Depuis le", value=date(2026, 1, 1), key=f"since_{page}")
+            if st.button("Calculer", key=f"calc_rep_{page}"):
+                df_rep = df_raw_with_2024[
+                    (df_raw_with_2024['SalesEmployee'].astype(str) == rep_sel) &
+                    (df_raw_with_2024['DateAnalyse'] >= pd.Timestamp(since_sel))
+                ]
+                st.metric(f"Total caisses équivalentes – {rep_sel}", f"{df_rep['CAISSE EQ'].sum():,.0f}")
+                col_m, col_s = st.columns(2)
+                with col_m:
+                    st.write("**Par mois**")
+                    par_mois_rep = df_rep.groupby(df_rep['DateAnalyse'].dt.strftime('%Y-%m'))['CAISSE EQ'].sum().reset_index()
+                    par_mois_rep.columns = ['Mois', 'Caisses']
+                    st.dataframe(par_mois_rep, use_container_width=True, hide_index=True)
+                with col_s:
+                    st.write("**Par SKU**")
+                    par_sku_rep = df_rep.groupby('ItemName')['CAISSE EQ'].sum().reset_index().sort_values('CAISSE EQ', ascending=False)
+                    par_sku_rep.columns = ['SKU', 'Caisses']
+                    st.dataframe(par_sku_rep, use_container_width=True, hide_index=True)
+                st.write("**Par magasin**")
+                par_mag_rep = df_rep.groupby('CardName')['CAISSE EQ'].sum().reset_index().sort_values('CAISSE EQ', ascending=False)
+                par_mag_rep.columns = ['Magasin', 'Caisses']
+                st.dataframe(par_mag_rep, use_container_width=True, hide_index=True)
+
     # --- TOP BANNIÈRES ET CLIENTS ---
     st.divider()
     col_left, col_right = st.columns(2)
