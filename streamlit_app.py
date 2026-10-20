@@ -1124,13 +1124,18 @@ if df_raw_all is not None:
     pivot_sku_xls = df_2026_full.pivot_table(index='ItemName', columns='Mois_Nom', values='CAISSE EQ', aggfunc='sum').fillna(0)
     pivot_banner_xls = df_2026_full.groupby('GroupName')['CAISSE EQ'].sum().to_frame()
 
-    # Si la génération Excel échoue, afficher l'erreur à la place du bouton (sinon le bouton disparaît sans explication)
-    try:
-        excel_file = generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku_xls, pivot_banner_xls, df_raw, df_raw_with_2024)
-        st.sidebar.download_button(f"📥 Télécharger Rapport {page} (Excel)", data=excel_file, file_name=f"Rapport_{page}_{date.today()}.xlsx")
-    except Exception as e:
-        st.sidebar.error("Export Excel impossible : erreur pendant la génération du fichier.")
-        st.sidebar.exception(e)
+    # Export Excel généré seulement au clic (la génération est lourde et relancée à chaque rechargement de la page)
+    excel_key = f"excel_{page}"
+    if st.sidebar.button("📊 Préparer le rapport Excel", key=f"prep_{page}"):
+        # Si la génération échoue, afficher l'erreur à la place du bouton de téléchargement
+        try:
+            st.session_state[excel_key] = generate_styled_excel(df_week_comp, pivot_vol, pivot_val, pivot_sku_xls, pivot_banner_xls, df_raw, df_raw_with_2024)
+        except Exception as e:
+            st.session_state.pop(excel_key, None)
+            st.sidebar.error("Export Excel impossible : erreur pendant la génération du fichier.")
+            st.sidebar.exception(e)
+    if excel_key in st.session_state:
+        st.sidebar.download_button(f"📥 Télécharger Rapport {page} (Excel)", data=st.session_state[excel_key], file_name=f"Rapport_{page}_{date.today()}.xlsx")
 
     # --- TOP BANNIÈRES ET CLIENTS ---
     st.divider()
