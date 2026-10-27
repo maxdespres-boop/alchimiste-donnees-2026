@@ -5,6 +5,7 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 import io
 from datetime import date, timedelta
+from portrait_magasins import construire_portrait, exporter_excel
 
 st.set_page_config(page_title="Dashboard Alchimiste & LOOP - Master Intégral", layout="wide")
 
@@ -1171,6 +1172,34 @@ if df_raw_all is not None:
                 par_mag_rep = df_rep.groupby('CardName')['CAISSE EQ'].sum().reset_index().sort_values('CAISSE EQ', ascending=False)
                 par_mag_rep.columns = ['Magasin', 'Caisses']
                 st.dataframe(par_mag_rep, use_container_width=True, hide_index=True)
+
+    # --- PORTRAIT MAGASIN PAR MAGASIN (acquéreur / partenaire) ---
+    if page == "Alchimiste":
+        with st.expander("🧾 Portrait magasins (12 mois) — export pour acquéreur"):
+            st.caption("Une ligne par magasin : HL nets (retours inclus), caisses métriques, tranche de volume, "
+                       "canal, gratuités et rabais. Plus une synthèse par canal et le détail magasin × produit.")
+            fin_defaut = df_raw_with_2024['DateAnalyse'].max().date()
+            cp1, cp2, cp3 = st.columns([1, 1, 1])
+            with cp1:
+                debut_p = st.date_input("Début", value=fin_defaut - timedelta(days=364), key="portrait_debut")
+            with cp2:
+                fin_p = st.date_input("Fin", value=fin_defaut, key="portrait_fin")
+            with cp3:
+                vilains_p = st.checkbox("Inclure Vilains Brasseurs", value=True, key="portrait_vilains")
+            if st.button("Générer le portrait", key="portrait_go"):
+                try:
+                    portrait = construire_portrait(df_raw_with_2024, debut_p, fin_p, inclure_vilains=vilains_p)
+                    st.session_state["portrait_xlsx"] = exporter_excel(portrait)
+                    st.session_state["portrait_synthese"] = portrait['synthese']
+                    st.session_state["portrait_nom"] = f"Portrait_magasins_{debut_p}_{fin_p}.xlsx"
+                except Exception as e:
+                    st.session_state.pop("portrait_xlsx", None)
+                    st.error("Le portrait n'a pas pu être généré.")
+                    st.exception(e)
+            if "portrait_xlsx" in st.session_state:
+                st.dataframe(st.session_state["portrait_synthese"], use_container_width=True, hide_index=True)
+                st.download_button("📥 Télécharger le portrait (Excel)", data=st.session_state["portrait_xlsx"],
+                                   file_name=st.session_state["portrait_nom"], key="portrait_dl")
 
     # --- TOP BANNIÈRES ET CLIENTS ---
     st.divider()
